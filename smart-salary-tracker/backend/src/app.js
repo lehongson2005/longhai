@@ -10,7 +10,6 @@ const scheduleRoutes = require('./routes/schedule.routes');
 const expenseRoutes = require('./routes/expense.routes');
 const dashboardRoutes = require('./routes/dashboard.routes');
 const settingsRoutes = require('./routes/settings.routes');
-const publicRoutes = require('./routes/public.routes');
 const adminRoutes = require('./routes/admin.routes');
 
 const app = express();
@@ -18,7 +17,6 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-app.use('/api/public', publicRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/shifts', shiftRoutes);

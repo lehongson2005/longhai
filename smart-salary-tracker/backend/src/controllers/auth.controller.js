@@ -1,100 +1,180 @@
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const { dbRun, dbGet } = require('../database/db');
+const { dbRun, dbGet, ensureUserDefaults } = require('../database/db');
+
+function signToken(user) {
+    return jwt.sign(
+        { userId: user.id, role: user.role || 'employee' },
+        process.env.JWT_SECRET || 'secret',
+        { expiresIn: '7d' }
+    );
+}
+
+function serializeUser(user) {
+    return {
+        id: user.id,
+        name: user.name,
+        username: user.username || null,
+        email: user.email || null,
+        employee_code: user.employee_code || null,
+        role: user.role || 'employee'
+    };
+}
 
 exports.register = async (req, res) => {
     try {
-        const { name, email, employee_code, password } = req.body;
+        const { name, identifier, username, email, employee_code, password } = req.body;
+        const rawIdentifier = String(identifier ?? username ?? email ?? '').trim();
 
-        if (!name || !email || !password) {
-            return res.status(400).json({ message: 'Vui lòng nhập đầy đủ họ tên, email và mật khẩu' });
+        if (!name || !String(name).trim() || !rawIdentifier || !password) {
+            return res.status(400).json({ message: 'Vui lòng nhập đầy đủ họ tên, tên đăng nhập/SĐT và mật khẩu' });
         }
 
-        const cleanEmail = String(email).trim().toLowerCase();
-        const existingUser = await dbGet('SELECT id FROM users WHERE email = ?', [cleanEmail]);
+        if (/\s/.test(rawIdentifier)) {
+            return res.status(400).json({ message: 'Tên đăng nhập không được chứa khoảng trắng' });
+        }
+
+        if (String(password).length < 4) {
+            return res.status(400).json({ message: 'Mật khẩu phải có ít nhất 4 ký tự' });
+        }
+
+        const cleanId = rawIdentifier.toLowerCase();
+        const isEmail = cleanId.includes('@');
+        const cleanUsername = isEmail
+            ? (username && String(username).trim() ? String(username).trim().toLowerCase() : null)
+            : cleanId;
+        const cleanEmail = isEmail
+            ? cleanId
+            : (email && String(email).trim() ? String(email).trim().toLowerCase() : null);
+
+        const existingUser = await dbGet(
+            'SELECT id FROM users WHERE LOWER(username) = ? OR LOWER(email) = ? OR LOWER(employee_code) = ?',
+            [cleanId, cleanId, cleanId]
+        );
         if (existingUser) {
-            return res.status(400).json({ message: 'Email đã tồn tại trong hệ thống' });
+            return res.status(400).json({ message: 'Tên đăng nhập / Email này đã được sử dụng' });
         }
 
         const normalizedEmployeeCode =
             employee_code && String(employee_code).trim() ? String(employee_code).trim() : null;
 
         if (normalizedEmployeeCode) {
-            const existingCode = await dbGet('SELECT id FROM users WHERE employee_code = ?', [normalizedEmployeeCode]);
+            if (normalizedEmployeeCode.toLowerCase() === cleanId) {
+                return res.status(400).json({ message: 'Mã nhân viên không nên trùng với tên đăng nhập' });
+            }
+            const existingCode = await dbGet(
+                'SELECT id FROM users WHERE LOWER(employee_code) = ? OR LOWER(username) = ?',
+                [normalizedEmployeeCode.toLowerCase(), normalizedEmployeeCode.toLowerCase()]
+            );
             if (existingCode) {
                 return res.status(400).json({ message: 'Mã nhân viên đã tồn tại' });
             }
         }
 
-        const password_hash = await bcrypt.hash(password, 10);
+        const password_hash = await bcrypt.hash(String(password), 10);
 
         const result = await dbRun(
-            "INSERT INTO users (name, email, employee_code, password_hash, role) VALUES (?, ?, ?, ?, 'employee')",
-            [String(name).trim(), cleanEmail, normalizedEmployeeCode, password_hash]
+            "INSERT INTO users (name, username, email, employee_code, password_hash, role) VALUES (?, ?, ?, ?, ?, 'employee')",
+            [String(name).trim(), cleanUsername, cleanEmail, normalizedEmployeeCode, password_hash]
         );
 
-        await dbRun(
-            'INSERT INTO salary_settings (user_id, base_salary, standard_work_days, standard_hour_rate, overtime_rate, weekly_off_rate, holiday_rate) VALUES (?, ?, ?, ?, ?, ?, ?)',
-            [result.id, 5310000, 26, 25529, 38293, 51058, 2]
-        );
+        await ensureUserDefaults(result.id);
 
-        const defaultCategories = ['Ăn uống', 'Di chuyển', 'Nhà ở', 'Mua sắm', 'Giải trí', 'Khác'];
-        for (const cat of defaultCategories) {
-            await dbRun('INSERT INTO expense_categories (user_id, name, icon) VALUES (?, ?, ?)', [result.id, cat, '']);
-        }
+        const createdUser = await dbGet('SELECT id, name, username, email, employee_code, role FROM users WHERE id = ?', [
+            result.id
+        ]);
+        const token = signToken(createdUser);
 
-        res.status(201).json({ message: 'User registered successfully', userId: result.id });
+        res.status(201).json({
+            message: 'Tạo tài khoản thành công!',
+            token,
+            user: serializeUser(createdUser)
+        });
     } catch (error) {
         console.error(error);
-        res.status(500).json({ message: 'Server error' });
+        res.status(500).json({ message: 'Lỗi máy chủ khi đăng ký tài khoản' });
     }
 };
 
 exports.login = async (req, res) => {
     try {
-        const { email, password } = req.body;
-        const cleanEmail = email ? String(email).trim().toLowerCase() : '';
+        const { identifier, email, username, password } = req.body;
+        const rawIdentifier = String(identifier ?? email ?? username ?? '').trim();
+        const cleanId = rawIdentifier.toLowerCase();
 
-        const user = await dbGet('SELECT * FROM users WHERE email = ?', [cleanEmail]);
-        if (!user) {
-            return res.status(401).json({ message: 'Email hoặc mật khẩu không đúng' });
+        if (!cleanId || !password) {
+            return res.status(400).json({ message: 'Vui lòng nhập đầy đủ tài khoản và mật khẩu' });
         }
 
-        const isValidPassword = await bcrypt.compare(password || '', user.password_hash);
-        if (!isValidPassword) {
-            return res.status(401).json({ message: 'Email hoặc mật khẩu không đúng' });
-        }
-
-        const token = jwt.sign(
-            { userId: user.id, role: user.role || 'employee' },
-            process.env.JWT_SECRET || 'secret',
-            { expiresIn: '7d' }
+        const user = await dbGet(
+            'SELECT * FROM users WHERE LOWER(username) = ? OR LOWER(email) = ? OR LOWER(employee_code) = ? LIMIT 1',
+            [cleanId, cleanId, cleanId]
         );
+        if (!user) {
+            return res.status(401).json({ message: 'Tài khoản hoặc mật khẩu không đúng' });
+        }
+
+        const isValidPassword = await bcrypt.compare(String(password), user.password_hash);
+        if (!isValidPassword) {
+            return res.status(401).json({ message: 'Tài khoản hoặc mật khẩu không đúng' });
+        }
+
+        const token = signToken(user);
 
         res.json({
+            message: 'Đăng nhập thành công!',
             token,
-            user: {
-                id: user.id,
-                name: user.name,
-                email: user.email,
-                employee_code: user.employee_code,
-                role: user.role || 'employee'
-            }
+            user: serializeUser(user)
         });
     } catch (error) {
         console.error(error);
-        res.status(500).json({ message: 'Server error' });
+        res.status(500).json({ message: 'Lỗi máy chủ khi đăng nhập' });
+    }
+};
+
+exports.changePassword = async (req, res) => {
+    try {
+        const { currentPassword, newPassword } = req.body;
+        if (!currentPassword || !newPassword) {
+            return res.status(400).json({ message: 'Vui lòng nhập mật khẩu hiện tại và mật khẩu mới' });
+        }
+        if (String(newPassword).length < 4) {
+            return res.status(400).json({ message: 'Mật khẩu mới phải có ít nhất 4 ký tự' });
+        }
+
+        const user = await dbGet('SELECT * FROM users WHERE id = ?', [req.userId]);
+        if (!user) {
+            return res.status(404).json({ message: 'Không tìm thấy tài khoản' });
+        }
+
+        const matches = await bcrypt.compare(String(currentPassword), user.password_hash);
+        if (!matches) {
+            return res.status(400).json({ message: 'Mật khẩu hiện tại không đúng' });
+        }
+
+        const nextHash = await bcrypt.hash(String(newPassword), 10);
+        await dbRun('UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [
+            nextHash,
+            req.userId
+        ]);
+
+        res.json({ message: 'Đổi mật khẩu thành công!' });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Lỗi máy chủ khi đổi mật khẩu' });
     }
 };
 
 exports.getMe = async (req, res) => {
     try {
-        const user = await dbGet('SELECT id, name, email, employee_code, role FROM users WHERE id = ?', [req.userId]);
+        const user = await dbGet('SELECT id, name, username, email, employee_code, role FROM users WHERE id = ?', [
+            req.userId
+        ]);
         if (!user) {
-            return res.status(404).json({ message: 'User not found' });
+            return res.status(404).json({ message: 'Không tìm thấy tài khoản' });
         }
-        res.json(user);
+        res.json(serializeUser(user));
     } catch (error) {
-        res.status(500).json({ message: 'Server error' });
+        res.status(500).json({ message: 'Lỗi máy chủ' });
     }
 };

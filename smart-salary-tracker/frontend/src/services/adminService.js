@@ -5,44 +5,28 @@ export const getAdminStats = async () => {
     return response.data;
 };
 
-export const getAdminJobs = async () => {
-    const response = await api.get('/admin/jobs');
+export const getAdminUsers = async (q = '') => {
+    const params = q && q.trim() ? { q: q.trim() } : {};
+    const response = await api.get('/admin/users', { params });
     return response.data;
 };
 
-export const createAdminJob = async (data) => {
-    const response = await api.post('/admin/jobs', data);
+export const createAdminUser = async (data) => {
+    const response = await api.post('/admin/users', data);
     return response.data;
 };
 
-export const updateAdminJob = async (id, data) => {
-    const response = await api.put(`/admin/jobs/${id}`, data);
+export const resetUserPassword = async (id, newPassword = '123456') => {
+    const response = await api.post(`/admin/users/${id}/reset-password`, { newPassword });
     return response.data;
 };
 
-export const deleteAdminJob = async (id) => {
-    const response = await api.delete(`/admin/jobs/${id}`);
+export const updateAdminUser = async (id, data) => {
+    const response = await api.patch(`/admin/users/${id}`, data);
     return response.data;
 };
 
-export const getAdminApplications = async (status = 'all') => {
-    const params = status && status !== 'all' ? { status } : {};
-    const response = await api.get('/admin/applications', { params });
-    return response.data;
-};
-
-export const updateApplicationStatus = async (id, data) => {
-    const response = await api.patch(`/admin/applications/${id}`, data);
-    return response.data;
-};
-
-export const getAdminQuotes = async (status = 'all') => {
-    const params = status && status !== 'all' ? { status } : {};
-    const response = await api.get('/admin/quotes', { params });
-    return response.data;
-};
-
-export const updateQuoteStatus = async (id, data) => {
-    const response = await api.patch(`/admin/quotes/${id}`, data);
+export const deleteAdminUser = async (id) => {
+    const response = await api.delete(`/admin/users/${id}`);
     return response.data;
 };

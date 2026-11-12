@@ -1,6 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const sqlite3 = require('sqlite3').verbose();
 
 const testDbPath = path.join(os.tmpdir(), `longhai_test_${Date.now()}.sqlite`);
 process.env.DB_PATH = testDbPath;
@@ -17,204 +18,159 @@ afterAll(async () => {
     }
 });
 
-describe('Task 2: Database initialization, migration & seed', () => {
+describe('1. Database schema, shifts B1/B2 & memorable demo accounts', () => {
     beforeAll(async () => {
         await ready();
     });
 
-    test('creates required tables including jobs, applications, quote_requests and users.role', async () => {
+    test('creates core salary tracker tables and nullable email + username column on users', async () => {
         const tables = await dbAll("SELECT name FROM sqlite_master WHERE type='table'");
         const names = tables.map((t) => t.name);
-        expect(names).toEqual(expect.arrayContaining(['users', 'shifts', 'jobs', 'applications', 'quote_requests', 'salary_settings']));
+        expect(names).toEqual(
+            expect.arrayContaining(['users', 'shifts', 'work_schedules', 'expense_categories', 'expenses', 'salary_settings'])
+        );
 
         const userColumns = await dbAll('PRAGMA table_info(users)');
-        const colNames = userColumns.map((c) => c.name);
-        expect(colNames).toContain('role');
+        const usernameCol = userColumns.find((c) => c.name === 'username');
+        const emailCol = userColumns.find((c) => c.name === 'email');
+        expect(usernameCol).toBeTruthy();
+        expect(emailCol).toBeTruthy();
+        expect(emailCol.notnull).toBe(0);
     });
 
-    test('seeds at least 6 open jobs and 2 demo accounts with salary_settings', async () => {
-        const jobs = await dbAll('SELECT * FROM jobs WHERE status = "open"');
-        expect(jobs.length).toBeGreaterThanOrEqual(6);
+    test('seeds B1 and B2 4-hour shifts alongside default shifts', async () => {
+        const shifts = await dbAll('SELECT * FROM shifts WHERE user_id IS NULL');
+        const byCode = Object.fromEntries(shifts.map((s) => [s.code, s]));
 
-        const admin = await dbGet('SELECT * FROM users WHERE email = ?', ['admin@securitaslonghai.vn']);
+        expect(byCode.B1).toBeTruthy();
+        expect(byCode.B1.total_hours).toBe(4);
+        expect(byCode.B1.regular_hours).toBe(4);
+        expect(byCode.B1.overtime_hours).toBe(0);
+
+        expect(byCode.B2).toBeTruthy();
+        expect(byCode.B2.total_hours).toBe(4);
+        expect(byCode.B2.regular_hours).toBe(4);
+        expect(byCode.B2.overtime_hours).toBe(0);
+
+        expect(byCode.A.total_hours).toBe(8);
+        expect(byCode.A1.total_hours).toBe(12);
+        expect(byCode.AB.total_hours).toBe(16);
+    });
+
+    test('seeds memorable demo admin ("admin") and employee ("nv1") accounts', async () => {
+        const admin = await dbGet('SELECT * FROM users WHERE username = ?', ['admin']);
         expect(admin).toBeTruthy();
         expect(admin.role).toBe('admin');
 
-        const adminSettings = await dbGet('SELECT * FROM salary_settings WHERE user_id = ?', [admin.id]);
-        expect(adminSettings).toBeTruthy();
-
-        const employee = await dbGet('SELECT * FROM users WHERE email = ?', ['nhanvien@securitaslonghai.vn']);
+        const employee = await dbGet('SELECT * FROM users WHERE username = ?', ['nv1']);
         expect(employee).toBeTruthy();
         expect(employee.role).toBe('employee');
 
         const empSettings = await dbGet('SELECT * FROM salary_settings WHERE user_id = ?', [employee.id]);
         expect(empSettings).toBeTruthy();
+        const empCats = await dbAll('SELECT * FROM expense_categories WHERE user_id = ?', [employee.id]);
+        expect(empCats.length).toBeGreaterThanOrEqual(6);
     });
 });
 
-describe('Task 3: Auth registration empty employee_code & role reporting', () => {
+describe('2. Self-registration, flexible login & password change', () => {
+    let newUserToken;
+
     beforeAll(async () => {
         await ready();
     });
 
-    test('allows multiple users to register with empty employee_code', async () => {
-        const res1 = await request(app).post('/api/auth/register').send({
-            name: 'NV Mot',
-            email: 'nv1@example.com',
+    test('allows employee to self-register using a short username or phone (no email required) and returns token', async () => {
+        const res = await request(app).post('/api/auth/register').send({
+            name: 'Trần Minh Bảo',
+            identifier: '0909111222',
             employee_code: '',
-            password: 'password123'
+            password: 'matkhau99'
         });
-        expect(res1.statusCode).toBe(201);
+        expect(res.statusCode).toBe(201);
+        expect(res.body.token).toBeTruthy();
+        expect(res.body.user.username).toBe('0909111222');
+        expect(res.body.user.role).toBe('employee');
+        newUserToken = res.body.token;
 
+        // Second registration with empty employee_code works cleanly too
         const res2 = await request(app).post('/api/auth/register').send({
-            name: 'NV Hai',
-            email: 'nv2@example.com',
+            name: 'Lê Văn Hùng',
+            identifier: 'hungbv',
             employee_code: '',
-            password: 'password123'
+            password: '123456'
         });
         expect(res2.statusCode).toBe(201);
+        expect(res2.body.user.username).toBe('hungbv');
     });
 
-    test('login and /auth/me return user role for admin and employee', async () => {
+    test('prevents duplicate username/identifier registration', async () => {
+        const dupRes = await request(app).post('/api/auth/register').send({
+            name: 'Trùng Tài Khoản',
+            identifier: '0909111222',
+            password: 'password123'
+        });
+        expect(dupRes.statusCode).toBe(400);
+    });
+
+    test('logs in via username, employee_code, or email', async () => {
+        const byUsername = await request(app).post('/api/auth/login').send({
+            identifier: 'nv1',
+            password: process.env.DEMO_EMPLOYEE_PASSWORD || '123456'
+        });
+        expect(byUsername.statusCode).toBe(200);
+        expect(byUsername.body.user.role).toBe('employee');
+
+        const byCode = await request(app).post('/api/auth/login').send({
+            identifier: 'NV001',
+            password: process.env.DEMO_EMPLOYEE_PASSWORD || '123456'
+        });
+        expect(byCode.statusCode).toBe(200);
+        expect(byCode.body.user.username).toBe('nv1');
+
         const adminLogin = await request(app).post('/api/auth/login').send({
-            email: 'admin@securitaslonghai.vn',
-            password: process.env.DEMO_ADMIN_PASSWORD || 'Admin@123'
+            identifier: 'admin',
+            password: process.env.DEMO_ADMIN_PASSWORD || 'admin123'
         });
         expect(adminLogin.statusCode).toBe(200);
         expect(adminLogin.body.user.role).toBe('admin');
+    });
 
-        const meRes = await request(app)
-            .get('/api/auth/me')
-            .set('Authorization', `Bearer ${adminLogin.body.token}`);
-        expect(meRes.statusCode).toBe(200);
-        expect(meRes.body.role).toBe('admin');
+    test('authenticated user can change their own password', async () => {
+        const badCurrent = await request(app)
+            .post('/api/auth/change-password')
+            .set('Authorization', `Bearer ${newUserToken}`)
+            .send({ currentPassword: 'wrong', newPassword: 'newpass123' });
+        expect(badCurrent.statusCode).toBe(400);
 
-        const empLogin = await request(app).post('/api/auth/login').send({
-            email: 'nhanvien@securitaslonghai.vn',
-            password: process.env.DEMO_EMPLOYEE_PASSWORD || '123456'
+        const goodChange = await request(app)
+            .post('/api/auth/change-password')
+            .set('Authorization', `Bearer ${newUserToken}`)
+            .send({ currentPassword: 'matkhau99', newPassword: 'newpass123' });
+        expect(goodChange.statusCode).toBe(200);
+
+        const loginNew = await request(app).post('/api/auth/login').send({
+            identifier: '0909111222',
+            password: 'newpass123'
         });
-        expect(empLogin.statusCode).toBe(200);
-        expect(empLogin.body.user.role).toBe('employee');
+        expect(loginNew.statusCode).toBe(200);
     });
 });
 
-describe('Task 4: Public API (jobs, applications, quotes, salary-estimate)', () => {
-    beforeAll(async () => {
-        await ready();
-    });
-
-    test('GET /api/public/jobs filters by location and site_type, and /jobs/:id handles 404', async () => {
-        const allRes = await request(app).get('/api/public/jobs');
-        expect(allRes.statusCode).toBe(200);
-        expect(allRes.body.length).toBeGreaterThanOrEqual(6);
-
-        const bdRes = await request(app).get('/api/public/jobs').query({ location: 'Bình Dương' });
-        expect(bdRes.statusCode).toBe(200);
-        expect(bdRes.body.length).toBeGreaterThanOrEqual(1);
-        expect(bdRes.body.every((j) => j.location === 'Bình Dương')).toBe(true);
-
-        const detailRes = await request(app).get(`/api/public/jobs/${bdRes.body[0].id}`);
-        expect(detailRes.statusCode).toBe(200);
-        expect(detailRes.body.id).toBe(bdRes.body[0].id);
-
-        const notFoundRes = await request(app).get('/api/public/jobs/999999');
-        expect(notFoundRes.statusCode).toBe(404);
-    });
-
-    test('POST /api/public/applications validates phone and required fields then saves', async () => {
-        const badPhone = await request(app).post('/api/public/applications').send({
-            full_name: 'Trần Minh Tâm',
-            phone: '123',
-            preferred_location: 'TP. Hồ Chí Minh'
-        });
-        expect(badPhone.statusCode).toBe(400);
-
-        const jobsRes = await request(app).get('/api/public/jobs');
-        const firstJobId = jobsRes.body[0].id;
-
-        const validApp = await request(app).post('/api/public/applications').send({
-            job_id: firstJobId,
-            full_name: 'Trần Minh Tâm',
-            phone: '0909 123 456',
-            birth_year: 1995,
-            preferred_location: 'TP. Hồ Chí Minh',
-            preferred_shift: 'Ca 12h',
-            has_cccd: true,
-            experience_note: 'Bộ đội xuất ngũ'
-        });
-        expect(validApp.statusCode).toBe(201);
-        expect(validApp.body.id).toBeTruthy();
-
-        const saved = await dbGet('SELECT * FROM applications WHERE id = ?', [validApp.body.id]);
-        expect(saved.phone).toBe('0909123456');
-        expect(saved.job_id).toBe(firstJobId);
-    });
-
-    test('POST /api/public/quotes validates required fields and saves quote request', async () => {
-        const missingCompany = await request(app).post('/api/public/quotes').send({
-            contact_name: 'Anh Hùng',
-            phone: '0912345678',
-            location: 'Bình Dương',
-            service_type: 'Bảo vệ mục tiêu cố định'
-        });
-        expect(missingCompany.statusCode).toBe(400);
-
-        const validQuote = await request(app).post('/api/public/quotes').send({
-            company_name: 'Công ty TNHH Sản Xuất ABC',
-            contact_name: 'Nguyễn Văn Hùng',
-            phone: '0912-345-678',
-            email: 'hung@abc.vn',
-            location: 'Bình Dương',
-            service_type: 'Bảo vệ nhà máy / Khu công nghiệp',
-            guard_count: 12,
-            notes: 'Cần khảo sát tuần tới'
-        });
-        expect(validQuote.statusCode).toBe(201);
-        expect(validQuote.body.id).toBeTruthy();
-    });
-
-    test('POST /api/public/salary-estimate uses salaryCalculator logic and rejects > 31 total days', async () => {
-        const tooManyDays = await request(app).post('/api/public/salary-estimate').send({
-            shiftHours: 12,
-            normalDays: 28,
-            sundayDays: 4,
-            holidayDays: 0
-        });
-        expect(tooManyDays.statusCode).toBe(400);
-
-        const estRes = await request(app).post('/api/public/salary-estimate').send({
-            shiftHours: 12,
-            normalDays: 22,
-            sundayDays: 4,
-            holidayDays: 0,
-            hourlyRate: 25529,
-            mealAllowancePerDay: 30000
-        });
-        expect(estRes.statusCode).toBe(200);
-        // Normal day 12h = 8*25529 + 4*25529*1.5 = 357406 -> 22 * 357406 = 7,862,932
-        // Sunday 12h = 12*25529*2 = 612696 -> 4 * 612696 = 2,450,784
-        // Meal allowance = 26 * 30000 = 780,000
-        // Total = 11,093,716
-        expect(estRes.body.totalDays).toBe(26);
-        expect(estRes.body.totalHours).toBe(312);
-        expect(estRes.body.estimatedTotal).toBe(11093716);
-    });
-});
-
-describe('Task 5: Admin RBAC, Jobs CRUD, Applications & Quotes Management', () => {
+describe('3. Admin User Management & Reset Password to 123456', () => {
     let adminToken;
     let empToken;
 
     beforeAll(async () => {
         await ready();
         const adminRes = await request(app).post('/api/auth/login').send({
-            email: 'admin@securitaslonghai.vn',
-            password: process.env.DEMO_ADMIN_PASSWORD || 'Admin@123'
+            identifier: 'admin',
+            password: process.env.DEMO_ADMIN_PASSWORD || 'admin123'
         });
         adminToken = adminRes.body.token;
 
         const empRes = await request(app).post('/api/auth/login').send({
-            email: 'nhanvien@securitaslonghai.vn',
+            identifier: 'nv1',
             password: process.env.DEMO_EMPLOYEE_PASSWORD || '123456'
         });
         empToken = empRes.body.token;
@@ -222,98 +178,132 @@ describe('Task 5: Admin RBAC, Jobs CRUD, Applications & Quotes Management', () =
 
     test('blocks employee role from accessing /api/admin/*', async () => {
         const res = await request(app)
-            .get('/api/admin/stats')
+            .get('/api/admin/users')
             .set('Authorization', `Bearer ${empToken}`);
         expect(res.statusCode).toBe(403);
     });
 
-    test('allows admin to create, close, and safely delete a job that has applications', async () => {
+    test('admin can list, create, reset password back to 123456, and delete employee accounts', async () => {
         const createRes = await request(app)
-            .post('/api/admin/jobs')
+            .post('/api/admin/users')
             .set('Authorization', `Bearer ${adminToken}`)
             .send({
-                title: 'Bảo vệ Cảng Quốc tế Long An',
-                department: 'Bảo vệ mục tiêu',
-                location: 'TP. Hồ Chí Minh',
-                site_type: 'Khu công nghiệp / Nhà máy',
-                shift_type: 'Ca 12h',
-                salary_min: 9500000,
-                salary_max: 12000000,
-                salary_display: '9.5 - 12 triệu/tháng',
-                quantity: 10,
-                description: 'Kiểm soát cổng cảng và kho bãi.',
-                requirements: 'Có CCCD gắn chip, sức khỏe tốt.',
-                benefits: 'Đầy đủ BHXH và nhà đội.',
-                is_hot: 1
+                name: 'Phạm Văn Quên MK',
+                identifier: 'phamquen',
+                employee_code: 'LH-777',
+                password: 'customPassword999'
             });
         expect(createRes.statusCode).toBe(201);
-        const createdJobId = createRes.body.id;
+        const createdId = createRes.body.user.id;
 
-        const appRes = await request(app).post('/api/public/applications').send({
-            job_id: createdJobId,
-            full_name: 'Lê Hoàng Nam',
-            phone: '0988777666',
-            preferred_location: 'TP. Hồ Chí Minh'
-        });
-        expect(appRes.statusCode).toBe(201);
-        const appId = appRes.body.id;
-
-        const closeRes = await request(app)
-            .put(`/api/admin/jobs/${createdJobId}`)
-            .set('Authorization', `Bearer ${adminToken}`)
-            .send({ status: 'closed' });
-        expect(closeRes.statusCode).toBe(200);
-
-        const publicJobs = await request(app).get('/api/public/jobs');
-        expect(publicJobs.body.some((j) => j.id === createdJobId)).toBe(false);
-
-        const delRes = await request(app)
-            .delete(`/api/admin/jobs/${createdJobId}`)
+        const listRes = await request(app)
+            .get('/api/admin/users')
+            .query({ q: 'phamquen' })
             .set('Authorization', `Bearer ${adminToken}`);
-        expect(delRes.statusCode).toBe(200);
+        expect(listRes.statusCode).toBe(200);
+        expect(listRes.body.some((u) => u.id === createdId && u.password_hash === undefined)).toBe(true);
 
-        const savedApp = await dbGet('SELECT * FROM applications WHERE id = ?', [appId]);
-        expect(savedApp).toBeTruthy();
-        expect(savedApp.job_id).toBeNull();
+        const resetRes = await request(app)
+            .post(`/api/admin/users/${createdId}/reset-password`)
+            .set('Authorization', `Bearer ${adminToken}`);
+        expect(resetRes.statusCode).toBe(200);
+
+        const loginAfterReset = await request(app).post('/api/auth/login').send({
+            identifier: 'phamquen',
+            password: '123456'
+        });
+        expect(loginAfterReset.statusCode).toBe(200);
+
+        const deleteRes = await request(app)
+            .delete(`/api/admin/users/${createdId}`)
+            .set('Authorization', `Bearer ${adminToken}`);
+        expect(deleteRes.statusCode).toBe(200);
+    });
+});
+
+describe('4. Shifts B1/B2 scheduling, Expenses save/validation & Dashboard salary summary', () => {
+    let empToken;
+
+    beforeAll(async () => {
+        await ready();
+        const empRes = await request(app).post('/api/auth/login').send({
+            identifier: 'nv1',
+            password: process.env.DEMO_EMPLOYEE_PASSWORD || '123456'
+        });
+        empToken = empRes.body.token;
     });
 
-    test('allows admin to list and update application & quote statuses with whitelist validation', async () => {
-        const appsRes = await request(app)
-            .get('/api/admin/applications')
-            .set('Authorization', `Bearer ${adminToken}`);
-        expect(appsRes.statusCode).toBe(200);
-        expect(appsRes.body.length).toBeGreaterThanOrEqual(1);
+    test('schedules B1 (4h) and B2 (4h) shifts, computes dashboard income/hours, and supports delete', async () => {
+        const shiftsRes = await request(app)
+            .get('/api/shifts')
+            .set('Authorization', `Bearer ${empToken}`);
+        expect(shiftsRes.statusCode).toBe(200);
+        const shiftB1 = shiftsRes.body.find((s) => s.code === 'B1');
+        const shiftB2 = shiftsRes.body.find((s) => s.code === 'B2');
+        expect(shiftB1).toBeTruthy();
+        expect(shiftB2).toBeTruthy();
 
-        const targetAppId = appsRes.body[0].id;
-        const badStatus = await request(app)
-            .patch(`/api/admin/applications/${targetAppId}`)
-            .set('Authorization', `Bearer ${adminToken}`)
-            .send({ status: 'invalid_status' });
-        expect(badStatus.statusCode).toBe(400);
+        const sch1 = await request(app)
+            .post('/api/schedules')
+            .set('Authorization', `Bearer ${empToken}`)
+            .send({ work_date: '2026-11-10', shift_id: shiftB1.id, day_type: 'NORMAL' });
+        expect(sch1.statusCode).toBe(201);
 
-        const goodAppPatch = await request(app)
-            .patch(`/api/admin/applications/${targetAppId}`)
-            .set('Authorization', `Bearer ${adminToken}`)
-            .send({ status: 'contacted', admin_note: 'Đã hẹn phỏng vấn thứ 5' });
-        expect(goodAppPatch.statusCode).toBe(200);
+        const sch2 = await request(app)
+            .post('/api/schedules')
+            .set('Authorization', `Bearer ${empToken}`)
+            .send({ work_date: '2026-11-11', shift_id: shiftB2.id, day_type: 'WEEKLY_OFF' });
+        expect(sch2.statusCode).toBe(201);
 
-        const quotesRes = await request(app)
-            .get('/api/admin/quotes')
-            .set('Authorization', `Bearer ${adminToken}`);
-        expect(quotesRes.statusCode).toBe(200);
-        expect(quotesRes.body.length).toBeGreaterThanOrEqual(1);
+        const dashRes = await request(app)
+            .get('/api/dashboard')
+            .query({ date: '2026-11-10' })
+            .set('Authorization', `Bearer ${empToken}`);
+        expect(dashRes.statusCode).toBe(200);
+        // Today (2026-11-10) = B1 (4h) NORMAL = 4 * 25529 = 102116
+        expect(Math.round(dashRes.body.today.income)).toBe(102116);
+        // Month = B1 NORMAL (102116) + B2 WEEKLY_OFF (4 * 25529 * 2 = 204232) = 306348
+        expect(Math.round(dashRes.body.month.income)).toBe(306348);
+        expect(dashRes.body.month.totalHours).toBe(8);
+        expect(dashRes.body.month.workDays).toBe(2);
 
-        const targetQuoteId = quotesRes.body[0].id;
-        const goodQuotePatch = await request(app)
-            .patch(`/api/admin/quotes/${targetQuoteId}`)
-            .set('Authorization', `Bearer ${adminToken}`)
-            .send({ status: 'quoted', admin_note: 'Đã gửi báo giá qua email' });
-        expect(goodQuotePatch.statusCode).toBe(200);
+        const delRes = await request(app)
+            .delete(`/api/schedules/${sch2.body.id}`)
+            .set('Authorization', `Bearer ${empToken}`);
+        expect(delRes.statusCode).toBe(200);
+    });
 
-        const statsRes = await request(app)
-            .get('/api/admin/stats')
-            .set('Authorization', `Bearer ${adminToken}`);
-        expect(statsRes.statusCode).toBe(200);
-        expect(statsRes.body.openJobs).toBeGreaterThanOrEqual(6);
+    test('validates expenses and saves safely even when category_id is empty/omitted', async () => {
+        const badAmt = await request(app)
+            .post('/api/expenses')
+            .set('Authorization', `Bearer ${empToken}`)
+            .send({ amount: 0, expense_date: '2026-11-10', category_id: '', note: 'Invalid' });
+        expect(badAmt.statusCode).toBe(400);
+
+        const noCatSave = await request(app)
+            .post('/api/expenses')
+            .set('Authorization', `Bearer ${empToken}`)
+            .send({ amount: 45000, expense_date: '2026-11-10', category_id: '', note: 'Cơm ca' });
+        expect(noCatSave.statusCode).toBe(201);
+        const expId = noCatSave.body.id;
+
+        const updateRes = await request(app)
+            .put(`/api/expenses/${expId}`)
+            .set('Authorization', `Bearer ${empToken}`)
+            .send({ amount: 55000, expense_date: '2026-11-10', category_id: null, note: 'Cơm tối' });
+        expect(updateRes.statusCode).toBe(200);
+
+        const listRes = await request(app)
+            .get('/api/expenses')
+            .query({ month: '11', year: '2026' })
+            .set('Authorization', `Bearer ${empToken}`);
+        expect(listRes.statusCode).toBe(200);
+        const saved = listRes.body.find((e) => e.id === expId);
+        expect(saved.amount).toBe(55000);
+
+        const delRes = await request(app)
+            .delete(`/api/expenses/${expId}`)
+            .set('Authorization', `Bearer ${empToken}`);
+        expect(delRes.statusCode).toBe(200);
     });
 });

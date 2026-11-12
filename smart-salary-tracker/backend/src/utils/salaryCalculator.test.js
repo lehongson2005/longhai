@@ -1,7 +1,29 @@
-const { calculateNormalDay, calculateHoliday, calculateWeeklyOff } = require('./salaryCalculator');
+const {
+    calculateNormalDay,
+    calculateHoliday,
+    calculateWeeklyOff,
+    calculateShiftSalary
+} = require('./salaryCalculator');
 
 describe('Salary Calculator Tests', () => {
     const rate = 25529; // ~ 204,231 / 8
+
+    test('Calculate B1/B2 ngày thường (4h)', () => {
+        const res = calculateShiftSalary({ total_hours: 4 }, 'NORMAL', { standard_hour_rate: rate });
+        expect(res.regularHours).toBe(4);
+        expect(res.overtimeHours).toBe(0);
+        expect(Math.round(res.salary)).toBe(102116); // 4 * 25529
+    });
+
+    test('Calculate B1/B2 Chủ Nhật (4h * 200%)', () => {
+        const res = calculateShiftSalary({ total_hours: 4 }, 'WEEKLY_OFF', { standard_hour_rate: rate });
+        expect(Math.round(res.salary)).toBe(204232); // 4 * 25529 * 2
+    });
+
+    test('Calculate B1/B2 Ngày Lễ (4h * 200%)', () => {
+        const res = calculateShiftSalary({ total_hours: 4 }, 'HOLIDAY', { standard_hour_rate: rate });
+        expect(Math.round(res.salary)).toBe(204232); // 4 * 25529 * 2
+    });
 
     test('Calculate A ngày thường (8h)', () => {
         const res = calculateNormalDay(8, rate);

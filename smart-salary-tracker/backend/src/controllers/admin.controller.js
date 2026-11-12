@@ -1,27 +1,22 @@
-const { dbAll, dbGet, dbRun } = require('../database/db');
+const bcrypt = require('bcrypt');
+const { dbAll, dbGet, dbRun, ensureUserDefaults } = require('../database/db');
 
-const VALID_APP_STATUSES = ['new', 'contacted', 'interviewed', 'hired', 'rejected'];
-const VALID_QUOTE_STATUSES = ['new', 'consulting', 'quoted', 'closed'];
-const VALID_JOB_STATUSES = ['open', 'closed'];
+const VALID_ROLES = ['employee', 'admin'];
 
 exports.getStats = async (req, res) => {
     try {
-        const [openJobsRow, totalJobsRow, newAppsRow, totalAppsRow, newQuotesRow, totalQuotesRow] = await Promise.all([
-            dbGet("SELECT COUNT(*) as count FROM jobs WHERE status = 'open'"),
-            dbGet('SELECT COUNT(*) as count FROM jobs'),
-            dbGet("SELECT COUNT(*) as count FROM applications WHERE status = 'new'"),
-            dbGet('SELECT COUNT(*) as count FROM applications'),
-            dbGet("SELECT COUNT(*) as count FROM quote_requests WHERE status = 'new'"),
-            dbGet('SELECT COUNT(*) as count FROM quote_requests')
+        const [totalUsersRow, employeesRow, adminsRow, shiftsRow] = await Promise.all([
+            dbGet('SELECT COUNT(*) as count FROM users'),
+            dbGet("SELECT COUNT(*) as count FROM users WHERE role = 'employee'"),
+            dbGet("SELECT COUNT(*) as count FROM users WHERE role = 'admin'"),
+            dbGet('SELECT COUNT(*) as count FROM shifts WHERE user_id IS NULL AND is_active = 1')
         ]);
 
         res.json({
-            openJobs: openJobsRow?.count || 0,
-            totalJobs: totalJobsRow?.count || 0,
-            newApplications: newAppsRow?.count || 0,
-            totalApplications: totalAppsRow?.count || 0,
-            newQuotes: newQuotesRow?.count || 0,
-            totalQuotes: totalQuotesRow?.count || 0
+            totalUsers: totalUsersRow?.count || 0,
+            totalEmployees: employeesRow?.count || 0,
+            totalAdmins: adminsRow?.count || 0,
+            activeShifts: shiftsRow?.count || 0
         });
     } catch (error) {
         console.error(error);
@@ -29,260 +24,216 @@ exports.getStats = async (req, res) => {
     }
 };
 
-exports.getAllJobs = async (req, res) => {
+exports.listUsers = async (req, res) => {
     try {
-        const jobs = await dbAll('SELECT * FROM jobs ORDER BY is_hot DESC, created_at DESC, id DESC');
-        res.json(jobs);
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Lỗi máy chủ khi tải danh sách việc làm' });
-    }
-};
-
-exports.createJob = async (req, res) => {
-    try {
-        const {
-            title,
-            department = 'Bảo vệ mục tiêu',
-            location,
-            site_type = 'Tòa nhà văn phòng',
-            shift_type = 'Ca 8h / 12h linh hoạt',
-            salary_min = 7500000,
-            salary_max = 12000000,
-            salary_display,
-            quantity = 10,
-            description,
-            requirements,
-            benefits,
-            is_hot = 0,
-            status = 'open'
-        } = req.body;
-
-        if (!title || !String(title).trim() || !location || !String(location).trim()) {
-            return res.status(400).json({ message: 'Tiêu đề và địa điểm là bắt buộc' });
-        }
-
-        const minSal = Number(salary_min);
-        const maxSal = Number(salary_max);
-        if (!Number.isFinite(minSal) || !Number.isFinite(maxSal) || minSal < 0 || maxSal < minSal) {
-            return res.status(400).json({ message: 'Khoảng lương không hợp lệ' });
-        }
-
-        const jobStatus = VALID_JOB_STATUSES.includes(status) ? status : 'open';
-        const display =
-            salary_display && String(salary_display).trim()
-                ? String(salary_display).trim()
-                : `${(minSal / 1000000).toFixed(1)} - ${(maxSal / 1000000).toFixed(1)} triệu/tháng`;
-
-        const result = await dbRun(
-            `INSERT INTO jobs (title, department, location, site_type, shift_type, salary_min, salary_max, salary_display, quantity, description, requirements, benefits, is_hot, status)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-                String(title).trim(),
-                String(department).trim(),
-                String(location).trim(),
-                String(site_type).trim(),
-                String(shift_type).trim(),
-                minSal,
-                maxSal,
-                display,
-                Number(quantity) || 1,
-                description ? String(description).trim() : 'Thực hiện nhiệm vụ bảo vệ mục tiêu theo quy chuẩn Securitas.',
-                requirements ? String(requirements).trim() : 'Từ 18–50 tuổi, có CCCD gắn chip, sức khỏe tốt.',
-                benefits ? String(benefits).trim() : 'Đầy đủ BHXH/BHYT/BHTN, BHTN 24/7, lương tháng 13, không thu phí.',
-                is_hot ? 1 : 0,
-                jobStatus
-            ]
-        );
-
-        res.status(201).json({ id: result.id, message: 'Tạo tin tuyển dụng thành công' });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Lỗi máy chủ khi tạo tin tuyển dụng' });
-    }
-};
-
-exports.updateJob = async (req, res) => {
-    try {
-        const { id } = req.params;
-        const existing = await dbGet('SELECT * FROM jobs WHERE id = ?', [id]);
-        if (!existing) {
-            return res.status(404).json({ message: 'Không tìm thấy tin tuyển dụng' });
-        }
-
-        const {
-            title = existing.title,
-            department = existing.department,
-            location = existing.location,
-            site_type = existing.site_type,
-            shift_type = existing.shift_type,
-            salary_min = existing.salary_min,
-            salary_max = existing.salary_max,
-            salary_display = existing.salary_display,
-            quantity = existing.quantity,
-            description = existing.description,
-            requirements = existing.requirements,
-            benefits = existing.benefits,
-            is_hot = existing.is_hot,
-            status = existing.status
-        } = req.body;
-
-        if (!VALID_JOB_STATUSES.includes(status)) {
-            return res.status(400).json({ message: 'Trạng thái tin tuyển dụng không hợp lệ' });
-        }
-
-        const minSal = Number(salary_min);
-        const maxSal = Number(salary_max);
-        if (!Number.isFinite(minSal) || !Number.isFinite(maxSal) || minSal < 0 || maxSal < minSal) {
-            return res.status(400).json({ message: 'Khoảng lương không hợp lệ' });
-        }
-
-        await dbRun(
-            `UPDATE jobs
-             SET title = ?, department = ?, location = ?, site_type = ?, shift_type = ?,
-                 salary_min = ?, salary_max = ?, salary_display = ?, quantity = ?,
-                 description = ?, requirements = ?, benefits = ?, is_hot = ?, status = ?
-             WHERE id = ?`,
-            [
-                String(title).trim(),
-                String(department).trim(),
-                String(location).trim(),
-                String(site_type).trim(),
-                String(shift_type).trim(),
-                minSal,
-                maxSal,
-                String(salary_display).trim(),
-                Number(quantity) || 1,
-                String(description).trim(),
-                String(requirements).trim(),
-                String(benefits).trim(),
-                is_hot ? 1 : 0,
-                status,
-                id
-            ]
-        );
-
-        res.json({ message: 'Cập nhật tin tuyển dụng thành công' });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Lỗi máy chủ khi cập nhật tin tuyển dụng' });
-    }
-};
-
-exports.deleteJob = async (req, res) => {
-    try {
-        const { id } = req.params;
-        const existing = await dbGet('SELECT id FROM jobs WHERE id = ?', [id]);
-        if (!existing) {
-            return res.status(404).json({ message: 'Không tìm thấy tin tuyển dụng' });
-        }
-
-        await dbRun('UPDATE applications SET job_id = NULL WHERE job_id = ?', [id]);
-        await dbRun('DELETE FROM jobs WHERE id = ?', [id]);
-
-        res.json({ message: 'Đã xóa tin tuyển dụng' });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Lỗi máy chủ khi xóa tin tuyển dụng' });
-    }
-};
-
-exports.getApplications = async (req, res) => {
-    try {
-        const { status } = req.query;
+        const { q } = req.query;
         let query = `
-            SELECT a.*, j.title as job_title
-            FROM applications a
-            LEFT JOIN jobs j ON a.job_id = j.id
+            SELECT
+                u.id,
+                u.name,
+                u.username,
+                u.email,
+                u.employee_code,
+                u.role,
+                u.created_at,
+                u.updated_at,
+                (SELECT COUNT(*) FROM work_schedules ws WHERE ws.user_id = u.id) as schedule_count,
+                (SELECT COUNT(*) FROM expenses ex WHERE ex.user_id = u.id) as expense_count
+            FROM users u
         `;
         const params = [];
 
-        if (status && status !== 'all') {
-            query += ' WHERE a.status = ?';
-            params.push(status);
+        if (q && String(q).trim()) {
+            const kw = `%${String(q).trim()}%`;
+            query += ' WHERE u.name LIKE ? OR u.username LIKE ? OR u.email LIKE ? OR u.employee_code LIKE ?';
+            params.push(kw, kw, kw, kw);
         }
 
-        query += ' ORDER BY a.created_at DESC, a.id DESC';
-        const rows = await dbAll(query, params);
-        res.json(rows);
+        query += " ORDER BY CASE WHEN u.role = 'admin' THEN 0 ELSE 1 END, u.id DESC";
+        const users = await dbAll(query, params);
+        res.json(users);
     } catch (error) {
         console.error(error);
-        res.status(500).json({ message: 'Lỗi máy chủ khi tải danh sách ứng viên' });
+        res.status(500).json({ message: 'Lỗi máy chủ khi tải danh sách nhân viên' });
     }
 };
 
-exports.updateApplicationStatus = async (req, res) => {
+exports.createUser = async (req, res) => {
+    try {
+        const { name, identifier, username, email, employee_code, password, role = 'employee' } = req.body;
+        const rawIdentifier = String(identifier ?? username ?? email ?? '').trim();
+
+        if (!name || !String(name).trim() || !rawIdentifier) {
+            return res.status(400).json({ message: 'Vui lòng nhập họ tên và tên đăng nhập / SĐT' });
+        }
+
+        if (/\s/.test(rawIdentifier)) {
+            return res.status(400).json({ message: 'Tên đăng nhập không được chứa khoảng trắng' });
+        }
+
+        const safeRole = VALID_ROLES.includes(role) ? role : 'employee';
+        const rawPassword = password && String(password).trim() ? String(password).trim() : '123456';
+        if (rawPassword.length < 4) {
+            return res.status(400).json({ message: 'Mật khẩu phải có ít nhất 4 ký tự' });
+        }
+
+        const cleanId = rawIdentifier.toLowerCase();
+        const isEmail = cleanId.includes('@');
+        const cleanUsername = isEmail ? null : cleanId;
+        const cleanEmail = isEmail ? cleanId : null;
+
+        const existing = await dbGet(
+            'SELECT id FROM users WHERE LOWER(username) = ? OR LOWER(email) = ? OR LOWER(employee_code) = ?',
+            [cleanId, cleanId, cleanId]
+        );
+        if (existing) {
+            return res.status(400).json({ message: 'Tên đăng nhập / Email đã tồn tại' });
+        }
+
+        const normalizedCode = employee_code && String(employee_code).trim() ? String(employee_code).trim() : null;
+        if (normalizedCode) {
+            const existingCode = await dbGet(
+                'SELECT id FROM users WHERE LOWER(employee_code) = ? OR LOWER(username) = ?',
+                [normalizedCode.toLowerCase(), normalizedCode.toLowerCase()]
+            );
+            if (existingCode) {
+                return res.status(400).json({ message: 'Mã nhân viên đã tồn tại' });
+            }
+        }
+
+        const password_hash = await bcrypt.hash(rawPassword, 10);
+        const result = await dbRun(
+            'INSERT INTO users (name, username, email, employee_code, password_hash, role) VALUES (?, ?, ?, ?, ?, ?)',
+            [String(name).trim(), cleanUsername, cleanEmail, normalizedCode, password_hash, safeRole]
+        );
+
+        await ensureUserDefaults(result.id);
+
+        const created = await dbGet(
+            'SELECT id, name, username, email, employee_code, role, created_at FROM users WHERE id = ?',
+            [result.id]
+        );
+
+        res.status(201).json({
+            message: `Đã tạo tài khoản cho ${created.name} (mật khẩu mặc định: ${rawPassword})`,
+            user: created
+        });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Lỗi máy chủ khi tạo tài khoản' });
+    }
+};
+
+exports.resetPassword = async (req, res) => {
     try {
         const { id } = req.params;
-        const { status, admin_note } = req.body;
+        const nextPassword =
+            req.body && req.body.newPassword && String(req.body.newPassword).trim()
+                ? String(req.body.newPassword).trim()
+                : '123456';
 
-        const existing = await dbGet('SELECT * FROM applications WHERE id = ?', [id]);
-        if (!existing) {
-            return res.status(404).json({ message: 'Không tìm thấy hồ sơ ứng viên' });
+        if (nextPassword.length < 4) {
+            return res.status(400).json({ message: 'Mật khẩu đặt lại phải từ 4 ký tự trở lên' });
         }
 
-        const nextStatus = status || existing.status;
-        if (!VALID_APP_STATUSES.includes(nextStatus)) {
-            return res.status(400).json({ message: 'Trạng thái hồ sơ không hợp lệ' });
+        const targetUser = await dbGet('SELECT id, name, username, email FROM users WHERE id = ?', [id]);
+        if (!targetUser) {
+            return res.status(404).json({ message: 'Không tìm thấy tài khoản nhân viên' });
         }
 
-        const nextNote = admin_note !== undefined ? admin_note : existing.admin_note;
+        const password_hash = await bcrypt.hash(nextPassword, 10);
+        await dbRun('UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [
+            password_hash,
+            targetUser.id
+        ]);
 
-        await dbRun(
-            'UPDATE applications SET status = ?, admin_note = ? WHERE id = ?',
-            [nextStatus, nextNote, id]
-        );
-        res.json({ message: 'Cập nhật hồ sơ ứng viên thành công' });
+        res.json({
+            message: `Đã đặt lại mật khẩu của ${targetUser.name} về ${nextPassword}`,
+            userId: targetUser.id,
+            defaultPassword: nextPassword
+        });
     } catch (error) {
         console.error(error);
-        res.status(500).json({ message: 'Lỗi máy chủ' });
+        res.status(500).json({ message: 'Lỗi máy chủ khi đặt lại mật khẩu' });
     }
 };
 
-exports.getQuotes = async (req, res) => {
-    try {
-        const { status } = req.query;
-        let query = 'SELECT * FROM quote_requests';
-        const params = [];
-
-        if (status && status !== 'all') {
-            query += ' WHERE status = ?';
-            params.push(status);
-        }
-
-        query += ' ORDER BY created_at DESC, id DESC';
-        const rows = await dbAll(query, params);
-        res.json(rows);
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Lỗi máy chủ khi tải danh sách báo giá' });
-    }
-};
-
-exports.updateQuoteStatus = async (req, res) => {
+exports.updateUser = async (req, res) => {
     try {
         const { id } = req.params;
-        const { status, admin_note } = req.body;
-
-        const existing = await dbGet('SELECT * FROM quote_requests WHERE id = ?', [id]);
+        const existing = await dbGet('SELECT * FROM users WHERE id = ?', [id]);
         if (!existing) {
-            return res.status(404).json({ message: 'Không tìm thấy yêu cầu báo giá' });
+            return res.status(404).json({ message: 'Không tìm thấy tài khoản' });
         }
 
-        const nextStatus = status || existing.status;
-        if (!VALID_QUOTE_STATUSES.includes(nextStatus)) {
-            return res.status(400).json({ message: 'Trạng thái báo giá không hợp lệ' });
+        const nextName = req.body.name !== undefined ? String(req.body.name).trim() : existing.name;
+        if (!nextName) {
+            return res.status(400).json({ message: 'Họ tên không được để trống' });
         }
 
-        const nextNote = admin_note !== undefined ? admin_note : existing.admin_note;
+        const nextCode =
+            req.body.employee_code !== undefined
+                ? (String(req.body.employee_code).trim() || null)
+                : existing.employee_code;
+
+        if (nextCode) {
+            const clash = await dbGet('SELECT id FROM users WHERE LOWER(employee_code) = ? AND id != ?', [
+                nextCode.toLowerCase(),
+                existing.id
+            ]);
+            if (clash) {
+                return res.status(400).json({ message: 'Mã nhân viên đã thuộc về người khác' });
+            }
+        }
+
+        const nextRole = req.body.role !== undefined ? req.body.role : existing.role;
+        if (!VALID_ROLES.includes(nextRole)) {
+            return res.status(400).json({ message: 'Vai trò không hợp lệ' });
+        }
+        if (Number(existing.id) === Number(req.userId) && nextRole !== 'admin') {
+            return res.status(400).json({ message: 'Không thể tự hạ quyền Quản trị của chính mình' });
+        }
 
         await dbRun(
-            'UPDATE quote_requests SET status = ?, admin_note = ? WHERE id = ?',
-            [nextStatus, nextNote, id]
+            'UPDATE users SET name = ?, employee_code = ?, role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+            [nextName, nextCode, nextRole, existing.id]
         );
-        res.json({ message: 'Cập nhật yêu cầu báo giá thành công' });
+
+        const updated = await dbGet(
+            'SELECT id, name, username, email, employee_code, role, created_at FROM users WHERE id = ?',
+            [existing.id]
+        );
+        res.json({ message: 'Đã cập nhật thông tin tài khoản', user: updated });
     } catch (error) {
         console.error(error);
-        res.status(500).json({ message: 'Lỗi máy chủ' });
+        res.status(500).json({ message: 'Lỗi máy chủ khi cập nhật tài khoản' });
+    }
+};
+
+exports.deleteUser = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const target = await dbGet('SELECT id, name FROM users WHERE id = ?', [id]);
+        if (!target) {
+            return res.status(404).json({ message: 'Không tìm thấy tài khoản' });
+        }
+
+        if (Number(target.id) === Number(req.userId)) {
+            return res.status(400).json({ message: 'Không thể tự xóa tài khoản Admin đang đăng nhập' });
+        }
+
+        await dbRun('DELETE FROM work_schedules WHERE user_id = ?', [target.id]);
+        await dbRun('DELETE FROM expenses WHERE user_id = ?', [target.id]);
+        await dbRun('DELETE FROM salary_settings WHERE user_id = ?', [target.id]);
+        await dbRun('DELETE FROM expense_categories WHERE user_id = ?', [target.id]);
+        await dbRun('DELETE FROM salary_records WHERE user_id = ?', [target.id]);
+        await dbRun('DELETE FROM financial_goals WHERE user_id = ?', [target.id]);
+        await dbRun('DELETE FROM shifts WHERE user_id = ?', [target.id]);
+        await dbRun('DELETE FROM users WHERE id = ?', [target.id]);
+
+        res.json({ message: `Đã xóa tài khoản ${target.name}` });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Lỗi máy chủ khi xóa tài khoản' });
     }
 };

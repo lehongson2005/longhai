@@ -9,3 +9,8 @@ export const saveSchedule = async (data) => {
     const response = await api.post('/schedules', data);
     return response.data;
 };
+
+export const deleteSchedule = async (id) => {
+    const response = await api.delete(`/schedules/${id}`);
+    return response.data;
+};

@@ -1,5 +1,8 @@
 import { useState, useEffect } from 'react';
 import { getSettings, updateSettings } from '../services/settingsService';
+import { changePassword } from '../services/authService';
+import { Calculator, Save, Lock, Eye, EyeOff } from 'lucide-react';
+import { useToast } from '../components/useToast';
 
 export default function Settings() {
   const [settings, setSettings] = useState({
@@ -8,22 +11,59 @@ export default function Settings() {
     standard_hour_rate: '',
     overtime_rate: '',
     weekly_off_rate: '',
-    holiday_rate: ''
+    holiday_rate: '',
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState('');
+
+  // Change password state
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPass, setShowPass] = useState(false);
+  const [changingPass, setChangingPass] = useState(false);
+
+  const toast = useToast();
 
   useEffect(() => {
-    getSettings().then(res => {
-      if (res) setSettings(res);
-      setLoading(false);
-    });
-  }, []);
+    let active = true;
+    getSettings()
+      .then((res) => {
+        if (active && res) setSettings(res);
+      })
+      .catch(() => {
+        if (active) toast.error('Không thể tải cấu hình lương.');
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [toast]);
 
   const handleChange = (e) => {
     const { name, value } = e.target;
-    setSettings(prev => ({ ...prev, [name]: value }));
+    setSettings((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleAutoCalcRates = () => {
+    const base = Number(settings.base_salary);
+    const days = Number(settings.standard_work_days);
+    if (!Number.isFinite(base) || base <= 0 || !Number.isFinite(days) || days <= 0) {
+      toast.warning('Vui lòng nhập Lương cơ bản và Số công chuẩn hợp lệ trước.');
+      return;
+    }
+    const hourRate = Math.round(base / days / 8);
+    const otRate = Math.round(hourRate * 1.5);
+    const sundayRate = Math.round(hourRate * 2);
+    setSettings((prev) => ({
+      ...prev,
+      standard_hour_rate: hourRate,
+      overtime_rate: otRate,
+      weekly_off_rate: sundayRate,
+    }));
+    toast.info(`Đã tính đơn giá giờ = ${hourRate.toLocaleString('vi-VN')} ₫/h. Nhấn "Lưu cấu hình" để áp dụng.`);
   };
 
   const handleSave = async (e) => {
@@ -31,79 +71,200 @@ export default function Settings() {
     setSaving(true);
     try {
       await updateSettings({
-        base_salary: parseFloat(settings.base_salary),
-        standard_work_days: parseFloat(settings.standard_work_days),
-        standard_hour_rate: parseFloat(settings.standard_hour_rate),
-        overtime_rate: parseFloat(settings.overtime_rate),
-        weekly_off_rate: parseFloat(settings.weekly_off_rate),
-        holiday_rate: parseFloat(settings.holiday_rate)
+        base_salary: Number(settings.base_salary),
+        standard_work_days: Number(settings.standard_work_days),
+        standard_hour_rate: Number(settings.standard_hour_rate),
+        overtime_rate: Number(settings.overtime_rate),
+        weekly_off_rate: Number(settings.weekly_off_rate || Number(settings.standard_hour_rate) * 2),
+        holiday_rate: Number(settings.holiday_rate || 2),
       });
-      setMessage('Lưu cấu hình thành công!');
+      toast.success('Đã lưu cấu hình mức lương thành công!', 'Đã cập nhật');
     } catch (err) {
-      setMessage('Lỗi khi lưu cấu hình.');
+      toast.error(err.response?.data?.message || 'Lỗi khi lưu cấu hình lương.');
+    } finally {
+      setSaving(false);
     }
-    setSaving(false);
-    setTimeout(() => setMessage(''), 3000);
   };
 
-  if (loading) return <div>Đang tải...</div>;
+  const handleChangePassword = async (e) => {
+    e.preventDefault();
+    if (newPassword.length < 4) {
+      toast.warning('Mật khẩu mới phải từ 4 ký tự trở lên.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      toast.warning('Xác nhận mật khẩu mới chưa khớp.');
+      return;
+    }
+    setChangingPass(true);
+    try {
+      const res = await changePassword(currentPassword, newPassword);
+      toast.success(res.message || 'Đổi mật khẩu thành công!', 'Bảo mật tài khoản');
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Không thể đổi mật khẩu.');
+    } finally {
+      setChangingPass(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="bg-white rounded-2xl border border-slate-200 p-10 text-center text-slate-500">
+        Đang tải cài đặt...
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-gray-900">Cấu hình lương</h1>
-      
-      <form onSubmit={handleSave} className="bg-white rounded-xl shadow-sm border p-6 space-y-4">
-        {message && <div className="p-3 bg-green-50 text-green-700 rounded-lg text-sm">{message}</div>}
-        
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div>
+        <h1 className="text-xl sm:text-2xl font-extrabold text-[#0A192F]">Cài đặt lương & tài khoản</h1>
+        <p className="text-xs text-slate-500 mt-0.5">Điều chỉnh đơn giá tính lương và đổi mật khẩu cá nhân</p>
+      </div>
+
+      {/* Salary Settings Card */}
+      <form onSubmit={handleSave} className="bg-white rounded-2xl shadow-xs border border-slate-200 p-5 sm:p-6 space-y-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="font-extrabold text-base text-[#0A192F]">1. Cấu hình đơn giá lương</h2>
+          <button
+            type="button"
+            onClick={handleAutoCalcRates}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-bold text-[#0A192F] cursor-pointer"
+          >
+            <Calculator className="w-3.5 h-3.5" />
+            <span>Tự tính đơn giá theo Lương cơ bản</span>
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Lương cơ bản (VND)</label>
-            <input 
-              type="number" 
+            <label className="block text-sm font-semibold text-slate-700 mb-1">Lương cơ bản (VNĐ)</label>
+            <input
+              type="number"
               name="base_salary"
               required
-              className="w-full px-4 py-2 border rounded-lg focus:ring-blue-500 focus:border-blue-500" 
-              value={settings.base_salary} 
-              onChange={handleChange} 
+              min={0}
+              className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#0A192F]"
+              value={settings.base_salary}
+              onChange={handleChange}
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Số công chuẩn</label>
-            <input 
-              type="number" 
+            <label className="block text-sm font-semibold text-slate-700 mb-1">Số công chuẩn / tháng</label>
+            <input
+              type="number"
               name="standard_work_days"
               required
-              className="w-full px-4 py-2 border rounded-lg focus:ring-blue-500 focus:border-blue-500" 
-              value={settings.standard_work_days} 
-              onChange={handleChange} 
+              min={1}
+              className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#0A192F]"
+              value={settings.standard_work_days}
+              onChange={handleChange}
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Đơn giá giờ (VND)</label>
-            <input 
-              type="number" 
+            <label className="block text-sm font-semibold text-slate-700 mb-1">Đơn giá giờ chuẩn (VNĐ/giờ)</label>
+            <input
+              type="number"
               name="standard_hour_rate"
               required
-              className="w-full px-4 py-2 border rounded-lg focus:ring-blue-500 focus:border-blue-500" 
-              value={settings.standard_hour_rate} 
-              onChange={handleChange} 
+              min={1}
+              className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#0A192F]"
+              value={settings.standard_hour_rate}
+              onChange={handleChange}
             />
+            <p className="text-[11px] text-slate-500 mt-1">Áp dụng trực tiếp khi tính công ca B1/B2 (4h), A/B/C (8h)...</p>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Đơn giá OT (VND)</label>
-            <input 
-              type="number" 
+            <label className="block text-sm font-semibold text-slate-700 mb-1">Đơn giá OT 150% (VNĐ/giờ)</label>
+            <input
+              type="number"
               name="overtime_rate"
               required
-              className="w-full px-4 py-2 border rounded-lg focus:ring-blue-500 focus:border-blue-500" 
-              value={settings.overtime_rate} 
-              onChange={handleChange} 
+              min={0}
+              className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#0A192F]"
+              value={settings.overtime_rate}
+              onChange={handleChange}
             />
           </div>
         </div>
 
-        <button type="submit" disabled={saving} className="bg-blue-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-blue-700">
-          {saving ? 'Đang lưu...' : 'Lưu thay đổi'}
+        <button
+          type="submit"
+          disabled={saving}
+          className="inline-flex items-center justify-center gap-2 bg-[#0A192F] hover:bg-[#13294B] text-white px-6 py-3 rounded-xl font-bold text-sm cursor-pointer disabled:opacity-60"
+        >
+          <Save className="w-4 h-4" />
+          <span>{saving ? 'Đang lưu...' : 'Lưu cấu hình lương'}</span>
+        </button>
+      </form>
+
+      {/* Change Password Card */}
+      <form onSubmit={handleChangePassword} className="bg-white rounded-2xl shadow-xs border border-slate-200 p-5 sm:p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="font-extrabold text-base text-[#0A192F]">2. Đổi mật khẩu đăng nhập</h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Nếu vừa được Admin đặt lại mật khẩu về <code className="font-bold">123456</code>, hãy đổi mật khẩu riêng tại đây.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowPass((p) => !p)}
+            className="p-2 rounded-xl border border-slate-200 text-slate-500 hover:text-slate-700 cursor-pointer"
+            aria-label={showPass ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+          >
+            {showPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+          <div>
+            <label className="block text-xs font-bold text-slate-600 mb-1">Mật khẩu hiện tại</label>
+            <input
+              type={showPass ? 'text' : 'password'}
+              required
+              className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#0A192F]"
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+              placeholder="VD: 123456"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-600 mb-1">Mật khẩu mới</label>
+            <input
+              type={showPass ? 'text' : 'password'}
+              required
+              minLength={4}
+              className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#0A192F]"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              placeholder="Từ 4 ký tự trở lên"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-600 mb-1">Nhập lại mật khẩu mới</label>
+            <input
+              type={showPass ? 'text' : 'password'}
+              required
+              minLength={4}
+              className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#0A192F]"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              placeholder="Nhập lại mật khẩu mới"
+            />
+          </div>
+        </div>
+
+        <button
+          type="submit"
+          disabled={changingPass}
+          className="inline-flex items-center justify-center gap-2 bg-[#E30613] hover:bg-[#B8040E] text-white px-6 py-3 rounded-xl font-bold text-sm cursor-pointer disabled:opacity-60"
+        >
+          <Lock className="w-4 h-4" />
+          <span>{changingPass ? 'Đang cập nhật...' : 'Đổi mật khẩu'}</span>
         </button>
       </form>
     </div>

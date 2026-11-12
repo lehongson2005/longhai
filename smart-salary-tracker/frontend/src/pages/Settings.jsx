@@ -1,13 +1,14 @@
 import { useState, useEffect } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import { getSettings, getCachedSettings, updateSettings } from '../services/settingsService';
-import { changePassword } from '../services/authService';
-import { Calculator, Save, Lock, Eye, EyeOff } from 'lucide-react';
+import { changePassword, updateProfile } from '../services/authService';
+import { Calculator, Save, Lock, Eye, EyeOff, UserRound } from 'lucide-react';
 import { useToast } from '../components/useToast';
 
 export default function Settings() {
   const outletContext = useOutletContext() || {};
   const user = outletContext.user;
+  const setUser = outletContext.setUser;
   const cachedSettings = getCachedSettings();
   const [settings, setSettings] = useState(
     () =>
@@ -22,6 +23,11 @@ export default function Settings() {
   );
   const [loading, setLoading] = useState(() => !cachedSettings);
   const [saving, setSaving] = useState(false);
+
+  // Profile edit state
+  const [profileName, setProfileName] = useState(() => user?.name || '');
+  const [profileCode, setProfileCode] = useState(() => user?.employee_code || '');
+  const [savingProfile, setSavingProfile] = useState(false);
 
   // Change password state
   const [currentPassword, setCurrentPassword] = useState('');
@@ -93,6 +99,26 @@ export default function Settings() {
     }
   };
 
+  const handleSaveProfile = async (e) => {
+    e.preventDefault();
+    if (!profileName.trim()) {
+      toast.warning('Họ và tên không được để trống.');
+      return;
+    }
+    setSavingProfile(true);
+    try {
+      const res = await updateProfile({ name: profileName.trim(), employee_code: profileCode.trim() });
+      if (res?.user && typeof setUser === 'function') {
+        setUser(res.user);
+      }
+      toast.success(res.message || 'Đã cập nhật thông tin cá nhân!', 'Hồ sơ tài khoản');
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Không thể cập nhật thông tin cá nhân.');
+    } finally {
+      setSavingProfile(false);
+    }
+  };
+
   const handleChangePassword = async (e) => {
     e.preventDefault();
     if (newPassword.length < 4) {
@@ -129,13 +155,70 @@ export default function Settings() {
     <div className="space-y-6">
       <div>
         <h1 className="text-xl sm:text-2xl font-extrabold text-[#0A192F]">Cài đặt lương & tài khoản</h1>
-        <p className="text-xs text-slate-500 mt-0.5">Điều chỉnh đơn giá tính lương và đổi mật khẩu cá nhân</p>
+        <p className="text-xs text-slate-500 mt-0.5">Cập nhật thông tin cá nhân, đơn giá tính lương và đổi mật khẩu</p>
       </div>
+
+      {/* Profile Settings Card */}
+      <form onSubmit={handleSaveProfile} className="bg-white rounded-2xl shadow-xs border border-slate-200 p-5 sm:p-6 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="font-extrabold text-base text-[#0A192F]">1. Thông tin cá nhân</h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Tên đăng nhập hiện tại:{' '}
+              <strong className="text-slate-800">{user?.username || user?.email || user?.employee_code || '-'}</strong>
+            </p>
+          </div>
+          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-slate-100 text-xs font-bold text-slate-700">
+            <UserRound className="w-3.5 h-3.5 text-[#0A192F]" />
+            <span>{user?.role === 'admin' ? 'Quản trị Admin' : 'Nhân viên'}</span>
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label htmlFor="settings-profile-name" className="block text-sm font-semibold text-slate-700 mb-1">
+              Họ và tên *
+            </label>
+            <input
+              id="settings-profile-name"
+              type="text"
+              required
+              maxLength={100}
+              className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#0A192F] text-sm"
+              value={profileName}
+              onChange={(e) => setProfileName(e.target.value)}
+              placeholder="VD: Nguyễn Văn Bảo"
+            />
+          </div>
+          <div>
+            <label htmlFor="settings-profile-code" className="block text-sm font-semibold text-slate-700 mb-1">
+              Mã nhân viên <span className="text-slate-400 font-normal">(tùy chọn)</span>
+            </label>
+            <input
+              id="settings-profile-code"
+              type="text"
+              className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#0A192F] text-sm"
+              value={profileCode}
+              onChange={(e) => setProfileCode(e.target.value)}
+              placeholder="VD: LH-102"
+            />
+          </div>
+        </div>
+
+        <button
+          type="submit"
+          disabled={savingProfile}
+          className="inline-flex items-center justify-center gap-2 bg-[#0A192F] hover:bg-[#13294B] text-white px-5 py-2.5 rounded-xl font-bold text-sm cursor-pointer disabled:opacity-60"
+        >
+          <Save className="w-4 h-4" />
+          <span>{savingProfile ? 'Đang lưu...' : 'Lưu thông tin cá nhân'}</span>
+        </button>
+      </form>
 
       {/* Salary Settings Card */}
       <form onSubmit={handleSave} className="bg-white rounded-2xl shadow-xs border border-slate-200 p-5 sm:p-6 space-y-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="font-extrabold text-base text-[#0A192F]">1. Cấu hình đơn giá lương</h2>
+          <h2 className="font-extrabold text-base text-[#0A192F]">2. Cấu hình đơn giá lương</h2>
           <button
             type="button"
             onClick={handleAutoCalcRates}
@@ -225,7 +308,7 @@ export default function Settings() {
         />
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="font-extrabold text-base text-[#0A192F]">2. Đổi mật khẩu đăng nhập</h2>
+            <h2 className="font-extrabold text-base text-[#0A192F]">3. Đổi mật khẩu đăng nhập</h2>
             <p className="text-xs text-slate-500 mt-0.5">
               Nếu vừa được Admin đặt lại mật khẩu về <code className="font-bold">123456</code>, hãy đổi mật khẩu riêng tại đây.
             </p>

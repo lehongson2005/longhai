@@ -8,5 +8,6 @@ router.use(authMiddleware);
 router.get('/', shiftController.getShifts);
 router.post('/', shiftController.createShift);
 router.put('/:id', shiftController.updateShift);
+router.delete('/:id', shiftController.deleteShift);
 
 module.exports = router;

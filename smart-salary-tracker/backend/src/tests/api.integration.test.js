@@ -546,3 +546,164 @@ describe('6. Backup export/restore & positive integer ID validation', () => {
         expect(secondRestore.body.stats.expensesAdded).toBe(0);
     });
 });
+
+describe('7. Security alerts, Self-profile update, Custom shifts & Admin team payroll', () => {
+    let adminToken;
+    let empToken;
+
+    beforeAll(async () => {
+        await ready();
+        const [adminRes, empRes] = await Promise.all([
+            request(app).post('/api/auth/login').send({
+                identifier: 'admin',
+                password: process.env.DEMO_ADMIN_PASSWORD || 'admin123'
+            }),
+            request(app).post('/api/auth/login').send({
+                identifier: 'nv1',
+                password: process.env.DEMO_EMPLOYEE_PASSWORD || '123456'
+            })
+        ]);
+        adminToken = adminRes.body.token;
+        empToken = empRes.body.token;
+    });
+
+    test('detects default admin123 password in /api/admin/stats and clears alert once changed', async () => {
+        const defaultPass = process.env.DEMO_ADMIN_PASSWORD || 'admin123';
+        const stats1 = await request(app).get('/api/admin/stats').set('Authorization', `Bearer ${adminToken}`);
+        expect(stats1.statusCode).toBe(200);
+        expect(stats1.headers['cache-control']).toBe('no-store');
+        expect(stats1.body.isDefaultAdminPassword).toBe(defaultPass === 'admin123');
+
+        await request(app)
+            .post('/api/auth/change-password')
+            .set('Authorization', `Bearer ${adminToken}`)
+            .send({ currentPassword: defaultPass, newPassword: 'StrongAdminPassword!99' });
+
+        const stats2 = await request(app).get('/api/admin/stats').set('Authorization', `Bearer ${adminToken}`);
+        expect(stats2.statusCode).toBe(200);
+        expect(stats2.body.isDefaultAdminPassword).toBe(false);
+
+        // Restore original admin password for isolated cleanup
+        await request(app)
+            .post('/api/auth/change-password')
+            .set('Authorization', `Bearer ${adminToken}`)
+            .send({ currentPassword: 'StrongAdminPassword!99', newPassword: defaultPass });
+    });
+
+    test('updates own profile (name & unique employee_code) via PUT /api/auth/profile', async () => {
+        const dupRes = await request(app)
+            .put('/api/auth/profile')
+            .set('Authorization', `Bearer ${empToken}`)
+            .send({ name: 'Nguyễn Văn Bảo', employee_code: 'ADMIN' });
+        expect(dupRes.statusCode).toBe(400);
+
+        const okRes = await request(app)
+            .put('/api/auth/profile')
+            .set('Authorization', `Bearer ${empToken}`)
+            .send({ name: 'Nguyễn Văn Bảo Updated', employee_code: 'NV001-NEW' });
+        expect(okRes.statusCode).toBe(200);
+        expect(okRes.body.user.name).toBe('Nguyễn Văn Bảo Updated');
+        expect(okRes.body.user.employee_code).toBe('NV001-NEW');
+
+        const meRes = await request(app).get('/api/auth/me').set('Authorization', `Bearer ${empToken}`);
+        expect(meRes.statusCode).toBe(200);
+        expect(meRes.body.name).toBe('Nguyễn Văn Bảo Updated');
+    });
+
+    test('creates, lists with no-store, schedules, and safely deletes/deactivates custom personal shifts', async () => {
+        const badCreate = await request(app)
+            .post('/api/shifts')
+            .set('Authorization', `Bearer ${empToken}`)
+            .send({ code: 'B1', name: 'Trùng mã chuẩn', total_hours: 4 });
+        expect(badCreate.statusCode).toBe(400);
+
+        const createUnused = await request(app)
+            .post('/api/shifts')
+            .set('Authorization', `Bearer ${empToken}`)
+            .send({ code: 'K6', name: 'Ca tăng 6h', total_hours: 6 });
+        expect(createUnused.statusCode).toBe(201);
+
+        const delUnused = await request(app)
+            .delete(`/api/shifts/${createUnused.body.id}`)
+            .set('Authorization', `Bearer ${empToken}`);
+        expect(delUnused.statusCode).toBe(200);
+        expect(delUnused.body.deleted).toBe(true);
+
+        const createUsed = await request(app)
+            .post('/api/shifts')
+            .set('Authorization', `Bearer ${empToken}`)
+            .send({ code: 'Đ10', name: 'Ca đặc biệt 10h', total_hours: 10 });
+        expect(createUsed.statusCode).toBe(201);
+        const customShiftId = createUsed.body.id;
+
+        const shiftsList = await request(app).get('/api/shifts').set('Authorization', `Bearer ${empToken}`);
+        expect(shiftsList.statusCode).toBe(200);
+        expect(shiftsList.headers['cache-control']).toBe('no-store');
+        expect(shiftsList.body.some((s) => s.id === customShiftId && s.code === 'Đ10')).toBe(true);
+
+        // Global shift cannot be deleted by employee
+        const globalShift = shiftsList.body.find((s) => s.user_id == null);
+        const forbidGlobal = await request(app)
+            .delete(`/api/shifts/${globalShift.id}`)
+            .set('Authorization', `Bearer ${empToken}`);
+        expect(forbidGlobal.statusCode).toBe(403);
+
+        // Schedule custom shift then deactivate it -> historical schedule stays intact!
+        await request(app)
+            .post('/api/schedules')
+            .set('Authorization', `Bearer ${empToken}`)
+            .send({ work_date: '2026-10-05', shift_id: customShiftId, day_type: 'NORMAL' });
+
+        const deactivateRes = await request(app)
+            .delete(`/api/shifts/${customShiftId}`)
+            .set('Authorization', `Bearer ${empToken}`);
+        expect(deactivateRes.statusCode).toBe(200);
+        expect(deactivateRes.body.deactivated).toBe(true);
+
+        const shiftsAfter = await request(app).get('/api/shifts').set('Authorization', `Bearer ${empToken}`);
+        expect(shiftsAfter.body.some((s) => s.id === customShiftId)).toBe(false);
+
+        const octSchedules = await request(app)
+            .get('/api/schedules')
+            .query({ month: '10', year: '2026' })
+            .set('Authorization', `Bearer ${empToken}`);
+        const oct5 = octSchedules.body.find((s) => s.work_date === '2026-10-05');
+        expect(oct5).toBeTruthy();
+        expect(oct5.shift_code).toBe('Đ10');
+        expect(oct5.shift_hours).toBe(10);
+    });
+
+    test('computes team monthly payroll on GET /api/admin/team-payroll and enforces admin access', async () => {
+        const forbidden = await request(app)
+            .get('/api/admin/team-payroll')
+            .query({ month: '11', year: '2026' })
+            .set('Authorization', `Bearer ${empToken}`);
+        expect(forbidden.statusCode).toBe(403);
+
+        const badMonth = await request(app)
+            .get('/api/admin/team-payroll')
+            .query({ month: '13', year: '2026' })
+            .set('Authorization', `Bearer ${adminToken}`);
+        expect(badMonth.statusCode).toBe(400);
+
+        const [payrollRes, nv1Dash] = await Promise.all([
+            request(app)
+                .get('/api/admin/team-payroll')
+                .query({ month: '11', year: '2026' })
+                .set('Authorization', `Bearer ${adminToken}`),
+            request(app)
+                .get('/api/dashboard')
+                .query({ date: '2026-11-10', month: '11', year: '2026' })
+                .set('Authorization', `Bearer ${empToken}`)
+        ]);
+
+        expect(payrollRes.statusCode).toBe(200);
+        expect(payrollRes.body.period).toEqual({ month: 11, year: 2026 });
+        const nv1Row = payrollRes.body.members.find((m) => m.username === 'nv1');
+        expect(nv1Row).toBeTruthy();
+        expect(nv1Row.workDays).toBe(nv1Dash.body.month.workDays);
+        expect(nv1Row.totalHours).toBe(nv1Dash.body.month.totalHours);
+        expect(nv1Row.netSalary).toBe(nv1Dash.body.month.netSalary);
+        expect(payrollRes.body.totals.netSalary).toBeGreaterThanOrEqual(nv1Row.netSalary);
+    });
+});

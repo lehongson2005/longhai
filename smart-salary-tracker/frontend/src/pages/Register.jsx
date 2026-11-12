@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { ArrowLeft, User, Phone, BadgeCheck, Lock, Eye, EyeOff } from 'lucide-react';
+import { ArrowLeft, User, Phone, BadgeCheck, Lock, Eye, EyeOff, Clock } from 'lucide-react';
 import { register } from '../services/authService';
 import BrandLogo from '../components/BrandLogo';
 import { useToast } from '../components/useToast';
@@ -16,12 +16,20 @@ export default function Register({ setUser }) {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [slowWait, setSlowWait] = useState(false);
   const navigate = useNavigate();
   const toast = useToast();
+
+  useEffect(() => {
+    if (!loading) return undefined;
+    const timer = setTimeout(() => setSlowWait(true), 4000);
+    return () => clearTimeout(timer);
+  }, [loading]);
 
   const handleRegister = async (e) => {
     e.preventDefault();
     setError('');
+    setSlowWait(false);
     setLoading(true);
     try {
       const res = await register({
@@ -42,6 +50,7 @@ export default function Register({ setUser }) {
       toast.error(msg, 'Không thể tạo tài khoản');
     } finally {
       setLoading(false);
+      setSlowWait(false);
     }
   };
 
@@ -184,6 +193,15 @@ export default function Register({ setUser }) {
           >
             {loading ? 'Đang tạo tài khoản...' : 'Tạo tài khoản & Bắt đầu tính lương'}
           </button>
+
+          {loading && slowWait && (
+            <div className="bg-sky-50 border border-sky-200 text-sky-900 text-xs px-3.5 py-2.5 rounded-xl flex items-start gap-2">
+              <Clock className="w-4 h-4 text-sky-600 shrink-0 mt-0.5 animate-pulse" />
+              <span className="leading-relaxed">
+                Máy chủ miễn phí đang khởi động lại (lần đầu mất khoảng 20–45 giây). Tài khoản đang được tạo...
+              </span>
+            </div>
+          )}
         </form>
 
         <p className="text-center text-sm text-slate-600 pt-1">

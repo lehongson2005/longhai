@@ -313,6 +313,13 @@ async function seedShifts() {
 }
 
 async function seedDemoUsers() {
+    if (process.env.DISABLE_DEMO_SEED === 'true') {
+        const countRow = await dbGet('SELECT COUNT(*) as count FROM users');
+        if (Number(countRow?.count || 0) > 0) {
+            return;
+        }
+    }
+
     const demoAccounts = [
         {
             name: 'Quản trị viên (Admin)',
@@ -334,7 +341,12 @@ async function seedDemoUsers() {
         }
     ];
 
-    for (const acc of demoAccounts) {
+    const accountsToSeed =
+        process.env.DISABLE_DEMO_SEED === 'true'
+            ? demoAccounts.filter((acc) => acc.role === 'admin')
+            : demoAccounts;
+
+    for (const acc of accountsToSeed) {
         let user = await dbGet(
             'SELECT * FROM users WHERE LOWER(username) = ? OR LOWER(email) = ? OR LOWER(email) = ?',
             [acc.username, acc.email, acc.legacyEmail]

@@ -5,7 +5,7 @@ const defaultBaseUrl = import.meta.env.PROD ? '/api' : 'http://localhost:5000/ap
 
 const api = axios.create({
     baseURL: import.meta.env.VITE_API_URL || defaultBaseUrl,
-    timeout: 30000,
+    timeout: 65000,
 });
 
 api.interceptors.request.use((config) => {

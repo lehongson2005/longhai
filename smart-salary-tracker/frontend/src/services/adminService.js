@@ -5,6 +5,11 @@ export const getAdminStats = async () => {
     return response.data;
 };
 
+export const getTeamPayroll = async (month, year) => {
+    const response = await api.get('/admin/team-payroll', { params: { month, year } });
+    return response.data;
+};
+
 export const getAdminUsers = async (q = '') => {
     const params = q && q.trim() ? { q: q.trim() } : {};
     const response = await api.get('/admin/users', { params });

@@ -6,6 +6,7 @@ const { authMiddleware, requireAdmin } = require('../middleware/auth.middleware'
 router.use(authMiddleware, requireAdmin);
 
 router.get('/stats', adminController.getStats);
+router.get('/team-payroll', adminController.getTeamPayroll);
 router.get('/backup', adminController.exportBackup);
 router.post('/restore', adminController.importBackup);
 router.get('/users', adminController.listUsers);

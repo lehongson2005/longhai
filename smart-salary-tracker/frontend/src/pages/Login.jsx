@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { User, Lock, Eye, EyeOff, KeyRound } from 'lucide-react';
+import { User, Lock, Eye, EyeOff, KeyRound, Clock } from 'lucide-react';
 import { login } from '../services/authService';
 import BrandLogo from '../components/BrandLogo';
 import { useToast } from '../components/useToast';
@@ -14,12 +14,20 @@ export default function Login({ setUser }) {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [slowWait, setSlowWait] = useState(false);
   const navigate = useNavigate();
   const toast = useToast();
+
+  useEffect(() => {
+    if (!loading) return undefined;
+    const timer = setTimeout(() => setSlowWait(true), 4000);
+    return () => clearTimeout(timer);
+  }, [loading]);
 
   const handleLogin = async (e) => {
     e.preventDefault();
     setError('');
+    setSlowWait(false);
     setLoading(true);
     try {
       const data = await login(identifier, password);
@@ -41,6 +49,7 @@ export default function Login({ setUser }) {
       toast.error(msg, 'Không thể đăng nhập');
     } finally {
       setLoading(false);
+      setSlowWait(false);
     }
   };
 
@@ -131,6 +140,16 @@ export default function Login({ setUser }) {
           >
             {loading ? 'Đang kiểm tra...' : 'Đăng nhập'}
           </button>
+
+          {loading && slowWait && (
+            <div className="bg-sky-50 border border-sky-200 text-sky-900 text-xs px-3.5 py-2.5 rounded-xl flex items-start gap-2">
+              <Clock className="w-4 h-4 text-sky-600 shrink-0 mt-0.5 animate-pulse" />
+              <span className="leading-relaxed">
+                Máy chủ miễn phí đang khởi động lại sau thời gian nghỉ (lần đầu có thể mất 20–45 giây). Vui lòng giữ
+                nguyên trang...
+              </span>
+            </div>
+          )}
         </form>
 
         {/* Forgot password guidance */}

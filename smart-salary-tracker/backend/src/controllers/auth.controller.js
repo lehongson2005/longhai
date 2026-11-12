@@ -178,3 +178,57 @@ exports.getMe = async (req, res) => {
         res.status(500).json({ message: 'Lỗi máy chủ' });
     }
 };
+
+exports.updateProfile = async (req, res) => {
+    try {
+        const existing = await dbGet('SELECT * FROM users WHERE id = ?', [req.userId]);
+        if (!existing) {
+            return res.status(404).json({ message: 'Không tìm thấy tài khoản' });
+        }
+
+        const rawName = req.body?.name;
+        const nextName = rawName !== undefined ? String(rawName).trim() : existing.name;
+        if (!nextName) {
+            return res.status(400).json({ message: 'Họ và tên không được để trống' });
+        }
+        if (nextName.length > 100) {
+            return res.status(400).json({ message: 'Họ và tên tối đa 100 ký tự' });
+        }
+
+        const nextCode =
+            req.body?.employee_code !== undefined
+                ? (String(req.body.employee_code || '').trim() || null)
+                : existing.employee_code;
+
+        if (nextCode) {
+            if (/\s/.test(nextCode)) {
+                return res.status(400).json({ message: 'Mã nhân viên không được chứa khoảng trắng' });
+            }
+            const clash = await dbGet(
+                'SELECT id FROM users WHERE (LOWER(employee_code) = ? OR LOWER(username) = ?) AND id != ?',
+                [nextCode.toLowerCase(), nextCode.toLowerCase(), existing.id]
+            );
+            if (clash) {
+                return res.status(400).json({ message: 'Mã nhân viên đã thuộc về tài khoản khác' });
+            }
+        }
+
+        await dbRun(
+            'UPDATE users SET name = ?, employee_code = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+            [nextName, nextCode, existing.id]
+        );
+
+        const updated = await dbGet(
+            'SELECT id, name, username, email, employee_code, role FROM users WHERE id = ?',
+            [existing.id]
+        );
+
+        res.json({
+            message: 'Đã cập nhật thông tin cá nhân!',
+            user: serializeUser(updated)
+        });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Lỗi máy chủ khi cập nhật thông tin cá nhân' });
+    }
+};

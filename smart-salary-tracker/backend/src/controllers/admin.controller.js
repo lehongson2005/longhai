@@ -1,9 +1,18 @@
 const bcrypt = require('bcrypt');
-const { dbAll, dbGet, dbRun, ensureUserDefaults, getStorageInfo, parsePositiveInt } = require('../database/db');
+const { dbAll, dbGet, dbRun, ensureUserDefaults, getStorageInfo, getMonthDateRange, parsePositiveInt } = require('../database/db');
+const { calculateShiftSalary } = require('../utils/salaryCalculator');
 
 const VALID_ROLES = ['employee', 'admin'];
 const VALID_DAY_TYPES = ['NORMAL', 'WEEKLY_OFF', 'HOLIDAY'];
 const VALID_ADJUSTMENT_TYPES = ['ALLOWANCE', 'DEDUCTION'];
+const DEFAULT_SETTINGS = {
+    base_salary: 5310000,
+    standard_work_days: 26,
+    standard_hour_rate: 25529,
+    overtime_rate: 38293,
+    weekly_off_rate: 51058,
+    holiday_rate: 2
+};
 
 async function runInBatches(taskFns, batchSize = 10) {
     for (let i = 0; i < taskFns.length; i += batchSize) {
@@ -13,23 +22,195 @@ async function runInBatches(taskFns, batchSize = 10) {
 
 exports.getStats = async (req, res) => {
     try {
-        const [totalUsersRow, employeesRow, adminsRow, shiftsRow] = await Promise.all([
+        const [totalUsersRow, employeesRow, adminsRow, shiftsRow, currentAdminRow] = await Promise.all([
             dbGet('SELECT COUNT(*) as count FROM users'),
             dbGet("SELECT COUNT(*) as count FROM users WHERE role = 'employee'"),
             dbGet("SELECT COUNT(*) as count FROM users WHERE role = 'admin'"),
-            dbGet('SELECT COUNT(*) as count FROM shifts WHERE user_id IS NULL AND is_active = 1')
+            dbGet('SELECT COUNT(*) as count FROM shifts WHERE user_id IS NULL AND is_active = 1'),
+            dbGet('SELECT password_hash FROM users WHERE id = ?', [req.userId])
         ]);
 
+        const isDefaultAdminPassword = currentAdminRow?.password_hash
+            ? await bcrypt.compare('admin123', currentAdminRow.password_hash)
+            : false;
+
+        res.setHeader('Cache-Control', 'no-store');
         res.json({
             totalUsers: Number(totalUsersRow?.count || 0),
             totalEmployees: Number(employeesRow?.count || 0),
             totalAdmins: Number(adminsRow?.count || 0),
             activeShifts: Number(shiftsRow?.count || 0),
+            isDefaultAdminPassword,
             storage: getStorageInfo()
         });
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Lỗi máy chủ khi tải thống kê' });
+    }
+};
+
+exports.getTeamPayroll = async (req, res) => {
+    try {
+        const now = new Date();
+        const targetMonth = req.query.month !== undefined ? Number(req.query.month) : now.getMonth() + 1;
+        const targetYear = req.query.year !== undefined ? Number(req.query.year) : now.getFullYear();
+
+        let range;
+        try {
+            range = getMonthDateRange(targetMonth, targetYear);
+        } catch {
+            return res.status(400).json({ message: 'Tháng hoặc năm không hợp lệ' });
+        }
+
+        const [users, settingsRows, scheduleRows, adjustmentRows, expenseRows] = await Promise.all([
+            dbAll(
+                "SELECT id, name, username, email, employee_code, role FROM users ORDER BY CASE WHEN role = 'admin' THEN 0 ELSE 1 END, name ASC, id ASC"
+            ),
+            dbAll(
+                'SELECT user_id, base_salary, standard_work_days, standard_hour_rate, overtime_rate, weekly_off_rate, holiday_rate FROM salary_settings'
+            ),
+            dbAll(
+                `SELECT ws.user_id, ws.work_date, ws.day_type, s.total_hours, s.code as shift_code
+                 FROM work_schedules ws
+                 JOIN shifts s ON ws.shift_id = s.id
+                 WHERE ws.work_date >= ? AND ws.work_date < ?
+                 ORDER BY ws.work_date ASC`,
+                [range.start, range.endExclusive]
+            ),
+            dbAll(
+                `SELECT user_id, type, amount
+                 FROM salary_adjustments
+                 WHERE adjustment_date >= ? AND adjustment_date < ?`,
+                [range.start, range.endExclusive]
+            ),
+            dbAll(
+                `SELECT user_id, SUM(amount) as total_expense
+                 FROM expenses
+                 WHERE expense_date >= ? AND expense_date < ?
+                 GROUP BY user_id`,
+                [range.start, range.endExclusive]
+            )
+        ]);
+
+        const settingsMap = new Map(settingsRows.map((row) => [Number(row.user_id), row]));
+        const schedulesByUser = new Map();
+        for (const row of scheduleRows) {
+            const uid = Number(row.user_id);
+            if (!schedulesByUser.has(uid)) schedulesByUser.set(uid, []);
+            schedulesByUser.get(uid).push(row);
+        }
+
+        const adjustmentsByUser = new Map();
+        for (const row of adjustmentRows) {
+            const uid = Number(row.user_id);
+            if (!adjustmentsByUser.has(uid)) adjustmentsByUser.set(uid, []);
+            adjustmentsByUser.get(uid).push(row);
+        }
+
+        const expenseByUser = new Map(expenseRows.map((row) => [Number(row.user_id), Number(row.total_expense || 0)]));
+
+        const totals = {
+            totalMembers: users.length,
+            activeWorkers: 0,
+            workDays: 0,
+            totalHours: 0,
+            regularHours: 0,
+            overtimeHours: 0,
+            shiftIncome: 0,
+            allowances: 0,
+            deductions: 0,
+            netSalary: 0,
+            totalExpense: 0,
+            balance: 0
+        };
+
+        const members = users.map((u) => {
+            const uid = Number(u.id);
+            const userSettings = settingsMap.get(uid) || DEFAULT_SETTINGS;
+            const userSchedules = schedulesByUser.get(uid) || [];
+            const userAdjustments = adjustmentsByUser.get(uid) || [];
+
+            let rawShiftIncome = 0;
+            let totalHours = 0;
+            let regularHours = 0;
+            let overtimeHours = 0;
+            let workDays = 0;
+            const shiftCountMap = {};
+
+            for (const sch of userSchedules) {
+                const calc = calculateShiftSalary(sch, sch.day_type, userSettings);
+                const hrs = Number(sch.total_hours) || 0;
+                rawShiftIncome += calc.salary;
+                totalHours += hrs;
+                regularHours += calc.regularHours || 0;
+                overtimeHours += calc.overtimeHours || 0;
+                if (hrs > 0) workDays += 1;
+                shiftCountMap[sch.shift_code] = (shiftCountMap[sch.shift_code] || 0) + 1;
+            }
+
+            let rawAllowances = 0;
+            let rawDeductions = 0;
+            for (const adj of userAdjustments) {
+                const amt = Number(adj.amount) || 0;
+                if (adj.type === 'ALLOWANCE') rawAllowances += amt;
+                else if (adj.type === 'DEDUCTION') rawDeductions += amt;
+            }
+
+            const shiftIncome = Math.round(rawShiftIncome);
+            const allowances = Math.round(rawAllowances);
+            const deductions = Math.round(rawDeductions);
+            const netSalary = shiftIncome + allowances - deductions;
+            const totalExpense = Math.round(expenseByUser.get(uid) || 0);
+            const balance = netSalary - totalExpense;
+
+            if (workDays > 0 || netSalary !== 0 || totalExpense > 0) {
+                totals.activeWorkers += 1;
+            }
+            totals.workDays += workDays;
+            totals.totalHours += totalHours;
+            totals.regularHours += regularHours;
+            totals.overtimeHours += overtimeHours;
+            totals.shiftIncome += shiftIncome;
+            totals.allowances += allowances;
+            totals.deductions += deductions;
+            totals.netSalary += netSalary;
+            totals.totalExpense += totalExpense;
+            totals.balance += balance;
+
+            return {
+                id: u.id,
+                name: u.name,
+                username: u.username,
+                email: u.email,
+                employee_code: u.employee_code,
+                role: u.role,
+                workDays,
+                totalHours: Number(totalHours.toFixed(1)),
+                regularHours: Number(regularHours.toFixed(1)),
+                overtimeHours: Number(overtimeHours.toFixed(1)),
+                shiftIncome,
+                allowances,
+                deductions,
+                netSalary,
+                totalExpense,
+                balance,
+                shiftCounts: shiftCountMap
+            };
+        });
+
+        totals.totalHours = Number(totals.totalHours.toFixed(1));
+        totals.regularHours = Number(totals.regularHours.toFixed(1));
+        totals.overtimeHours = Number(totals.overtimeHours.toFixed(1));
+
+        res.setHeader('Cache-Control', 'no-store');
+        res.json({
+            period: { month: targetMonth, year: targetYear },
+            totals,
+            members
+        });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Lỗi máy chủ khi tổng hợp bảng công cả đội' });
     }
 };
 

@@ -7,7 +7,7 @@ import {
   bulkSaveSchedule,
   deleteSchedule,
 } from '../services/scheduleService';
-import { getShifts, getCachedShifts } from '../services/shiftService';
+import { getShifts, getCachedShifts, createShift, deleteShift } from '../services/shiftService';
 import { getSettings, getCachedSettings } from '../services/settingsService';
 import { getDashboardData } from '../services/dashboardService';
 import { startOfMonth, endOfMonth, eachDayOfInterval, format, getDay, addDays } from 'date-fns';
@@ -21,6 +21,7 @@ import {
   Coins,
   CalendarRange,
   Copy,
+  Plus,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useToast } from '../components/useToast';
@@ -103,6 +104,14 @@ export default function Schedule() {
   const [includeDetails, setIncludeDetails] = useState(true);
   const [dashboardSnapshot, setDashboardSnapshot] = useState(null);
   const [loadingPayslip, setLoadingPayslip] = useState(false);
+
+  // Custom shifts modal
+  const [customShiftOpen, setCustomShiftOpen] = useState(false);
+  const [customCode, setCustomCode] = useState('');
+  const [customName, setCustomName] = useState('');
+  const [customTotalHours, setCustomTotalHours] = useState('6');
+  const [savingCustomShift, setSavingCustomShift] = useState(false);
+  const [deletingShiftId, setDeletingShiftId] = useState(null);
 
   const toast = useToast();
 
@@ -351,6 +360,70 @@ export default function Schedule() {
     }
   };
 
+  const openCustomShiftModal = () => {
+    setCustomCode('');
+    setCustomName('');
+    setCustomTotalHours('6');
+    setCustomShiftOpen(true);
+  };
+
+  const handleCreateCustomShift = async (e) => {
+    e.preventDefault();
+    const code = customCode.trim();
+    const hours = Number(customTotalHours);
+    if (!code) {
+      toast.warning('Vui lòng nhập mã ca (VD: C2, Đ6).');
+      return;
+    }
+    if (!Number.isFinite(hours) || hours < 0 || hours > 24) {
+      toast.warning('Số giờ phải từ 0 đến 24 giờ.');
+      return;
+    }
+    const regHours = Math.min(8, hours);
+    const otHours = Math.max(0, hours - 8);
+    setSavingCustomShift(true);
+    try {
+      const res = await createShift({
+        code,
+        name: customName.trim() || `Ca ${code}`,
+        total_hours: hours,
+        regular_hours: regHours,
+        overtime_hours: otHours,
+      });
+      toast.success(res.message || `Đã thêm ca "${code}" (${hours}h)`, 'Ca trực riêng');
+      setCustomCode('');
+      setCustomName('');
+      await fetchData();
+      if (res?.id && showModal) {
+        setSelectedShiftId(res.id);
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Không thể thêm ca trực riêng.');
+    } finally {
+      setSavingCustomShift(false);
+    }
+  };
+
+  const handleDeleteCustomShift = async (shiftItem) => {
+    setDeletingShiftId(shiftItem.id);
+    try {
+      const res = await deleteShift(shiftItem.id);
+      toast.success(res.message || `Đã xóa ca "${shiftItem.code}"`);
+      await fetchData();
+      if (Number(selectedShiftId) === Number(shiftItem.id)) {
+        const fallback = shifts.find((s) => s.id !== shiftItem.id && s.code === 'A') || shifts[0];
+        if (fallback) setSelectedShiftId(fallback.id);
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Không thể xóa ca riêng.');
+    } finally {
+      setDeletingShiftId(null);
+    }
+  };
+
+  const customShifts = shifts.filter((s) => s.user_id != null);
+  const parsedCustomHours = Math.max(0, Math.min(24, Number(customTotalHours) || 0));
+
   const firstDay = getDay(startOfMonth(currentDate));
   const emptyDays = Array.from({ length: firstDay === 0 ? 6 : firstDay - 1 });
 
@@ -425,8 +498,8 @@ export default function Schedule() {
         </div>
       </div>
 
-      {/* Quick Tools: Bulk Schedule & Copy Payslip */}
-      <div className="grid grid-cols-2 gap-2.5 sm:gap-3">
+      {/* Quick Tools: Bulk Schedule, Copy Payslip & Custom Shifts */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 sm:gap-3">
         <button
           type="button"
           onClick={openBulkModal}
@@ -443,6 +516,15 @@ export default function Schedule() {
         >
           <Copy className="w-4 h-4 text-[#E30613]" />
           <span>Sao chép bảng công</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={openCustomShiftModal}
+          className="col-span-2 sm:col-span-1 inline-flex items-center justify-center gap-2 bg-white hover:bg-slate-50 border border-slate-300 text-[#0A192F] px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm shadow-xs cursor-pointer"
+        >
+          <Plus className="w-4 h-4 text-emerald-600" />
+          <span>Ca riêng ({customShifts.length})</span>
         </button>
       </div>
 
@@ -559,13 +641,24 @@ export default function Schedule() {
 
             <form onSubmit={handleSave} className="flex-1 overflow-y-auto p-5 space-y-5">
               <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">
-                  1. Chọn ca trực
-                </label>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                    1. Chọn ca trực
+                  </label>
+                  <button
+                    type="button"
+                    onClick={openCustomShiftModal}
+                    className="inline-flex items-center gap-1 text-xs font-bold text-emerald-700 hover:text-emerald-800 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Thêm ca riêng</span>
+                  </button>
+                </div>
                 <div className="grid grid-cols-3 gap-2">
                   {shifts.map((s) => {
                     const active = Number(selectedShiftId) === Number(s.id);
                     const isFourHour = s.total_hours === 4;
+                    const isCustom = s.user_id != null;
                     return (
                       <button
                         type="button"
@@ -575,12 +668,19 @@ export default function Schedule() {
                           'p-2.5 rounded-xl border text-center transition cursor-pointer relative',
                           active
                             ? 'border-[#E30613] bg-red-50 ring-2 ring-[#E30613]/40'
+                            : isCustom
+                            ? 'border-emerald-200 bg-emerald-50/50 hover:bg-emerald-50'
                             : isFourHour
                             ? 'border-amber-200 bg-amber-50/50 hover:bg-amber-50'
                             : 'border-slate-200 bg-white hover:bg-slate-50'
                         )}
                       >
-                        <div className="font-extrabold text-sm text-[#0A192F]">{s.code}</div>
+                        {isCustom && (
+                          <span className="absolute top-1 right-1 text-[9px] font-bold px-1 rounded bg-emerald-100 text-emerald-800">
+                            Riêng
+                          </span>
+                        )}
+                        <div className="font-extrabold text-sm text-[#0A192F] truncate">{s.code}</div>
                         <div className="text-[11px] text-slate-600 mt-0.5">
                           {s.total_hours > 0 ? `${s.total_hours} tiếng` : 'Nghỉ'}
                         </div>
@@ -934,6 +1034,146 @@ export default function Schedule() {
                   <span>Sao chép để gửi Zalo</span>
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Custom Shift Manager Modal */}
+      {customShiftOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-end sm:items-center justify-center sm:p-4 z-[65]">
+          <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full max-w-md max-h-[90dvh] flex flex-col overflow-hidden">
+            <div className="bg-[#0A192F] text-white px-5 py-4 flex items-center justify-between shrink-0">
+              <div>
+                <h3 className="font-extrabold text-base">Quản lý ca trực riêng</h3>
+                <p className="text-xs text-slate-300">Thêm ca đặc thù (VD: 6h, 10h, 14h...) dùng riêng cho bạn</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCustomShiftOpen(false)}
+                className="p-1.5 rounded-lg hover:bg-white/10 cursor-pointer"
+                aria-label="Đóng"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-5 space-y-5 text-sm">
+              <form onSubmit={handleCreateCustomShift} className="space-y-3 bg-slate-50 border border-slate-200 rounded-2xl p-4">
+                <div className="font-bold text-xs uppercase tracking-wider text-slate-600">Thêm ca riêng mới</div>
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label htmlFor="custom-shift-code" className="block text-xs font-bold text-slate-700 mb-1">
+                      Mã ca *
+                    </label>
+                    <input
+                      id="custom-shift-code"
+                      type="text"
+                      required
+                      maxLength={20}
+                      value={customCode}
+                      onChange={(e) => setCustomCode(e.target.value)}
+                      placeholder="VD: C6, K10"
+                      className="w-full px-3 py-2 border border-slate-300 rounded-xl bg-white text-sm font-bold"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="custom-shift-hours" className="block text-xs font-bold text-slate-700 mb-1">
+                      Số giờ làm *
+                    </label>
+                    <input
+                      id="custom-shift-hours"
+                      type="number"
+                      required
+                      min={0}
+                      max={24}
+                      step={0.5}
+                      value={customTotalHours}
+                      onChange={(e) => setCustomTotalHours(e.target.value)}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-xl bg-white text-sm font-bold"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label htmlFor="custom-shift-name" className="block text-xs font-bold text-slate-700 mb-1">
+                    Tên mô tả <span className="text-slate-400 font-normal">(tùy chọn)</span>
+                  </label>
+                  <input
+                    id="custom-shift-name"
+                    type="text"
+                    maxLength={60}
+                    value={customName}
+                    onChange={(e) => setCustomName(e.target.value)}
+                    placeholder="VD: Ca tăng cường 6 tiếng"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl bg-white text-sm"
+                  />
+                </div>
+
+                <div className="text-[11px] text-slate-600 bg-white rounded-xl border border-slate-200 px-3 py-2">
+                  Cách tính ngày thường: <strong>{Math.min(8, parsedCustomHours)}h</strong> chuẩn +{' '}
+                  <strong>{Math.max(0, parsedCustomHours - 8)}h</strong> tăng ca ={' '}
+                  <strong className="text-emerald-700">
+                    {formatVND(estimatePay(parsedCustomHours, 'NORMAL', hourRate, otRate))}
+                  </strong>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={savingCustomShift}
+                  className="w-full inline-flex items-center justify-center gap-1.5 bg-[#0A192F] hover:bg-[#13294B] text-white font-bold py-2.5 rounded-xl text-sm cursor-pointer disabled:opacity-60"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>{savingCustomShift ? 'Đang thêm...' : 'Thêm ca trực này'}</span>
+                </button>
+              </form>
+
+              <div className="space-y-2">
+                <div className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                  Ca riêng đã tạo ({customShifts.length})
+                </div>
+                {customShifts.length === 0 ? (
+                  <p className="text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-xl p-3">
+                    Bạn chưa tạo ca riêng nào. Ngoài 11 ca mặc định (B1, B2, A, B, C, A1, C1, AB, H, R, Nghỉ), bạn có
+                    thể tự thêm ca khác ở biểu mẫu phía trên.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {customShifts.map((cs) => (
+                      <div
+                        key={cs.id}
+                        className="flex items-center justify-between gap-2 bg-emerald-50/70 border border-emerald-200 rounded-xl px-3.5 py-2.5"
+                      >
+                        <div className="min-w-0">
+                          <div className="font-extrabold text-[#0A192F] truncate">
+                            {cs.code} <span className="font-semibold text-xs text-slate-600">• {cs.name}</span>
+                          </div>
+                          <div className="text-[11px] text-slate-600">
+                            {cs.total_hours}h ({cs.regular_hours}h chuẩn + {cs.overtime_hours}h OT)
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteCustomShift(cs)}
+                          disabled={deletingShiftId === cs.id}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-red-200 bg-white text-red-600 hover:bg-red-50 text-xs font-bold cursor-pointer disabled:opacity-50 shrink-0"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>{deletingShiftId === cs.id ? 'Đang xóa...' : 'Xóa'}</span>
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setCustomShiftOpen(false)}
+                className="w-full py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold cursor-pointer"
+              >
+                Đóng
+              </button>
             </div>
           </div>
         </div>

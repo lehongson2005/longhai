@@ -1,0 +1,32 @@
+{
+  "name": "Long Hải — Chấm Ca & Tính Lương",
+  "short_name": "Long Hải Lương",
+  "description": "Ứng dụng chấm ca trực (B1, B2, A, B, C, A1, C1, AB), ước tính lương và ghi chi tiêu cá nhân cho nhân viên Long Hải.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0A192F",
+  "theme_color": "#0A192F",
+  "lang": "vi",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

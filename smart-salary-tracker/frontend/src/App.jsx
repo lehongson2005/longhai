@@ -1,5 +1,6 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { Suspense, lazy, useEffect, useState } from 'react';
+import api from './services/api';
 import { getMe, getCachedUser, logout } from './services/authService';
 import {
   loadLogin,
@@ -42,7 +43,10 @@ function App() {
 
   useEffect(() => {
     const token = localStorage.getItem('token');
-    if (!token) return;
+    if (!token) {
+      api.get('/health').catch(() => {});
+      return;
+    }
     let active = true;
     getMe()
       .then((data) => {

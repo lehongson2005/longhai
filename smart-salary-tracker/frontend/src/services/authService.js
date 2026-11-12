@@ -41,6 +41,14 @@ export const changePassword = async (currentPassword, newPassword) => {
     return response.data;
 };
 
+export const updateProfile = async ({ name, employee_code }) => {
+    const response = await api.put('/auth/profile', { name, employee_code });
+    if (response.data?.user) {
+        localStorage.setItem(USER_CACHE_KEY, JSON.stringify(response.data.user));
+    }
+    return response.data;
+};
+
 export const getMe = async () => {
     const response = await api.get('/auth/me');
     if (response.data) {

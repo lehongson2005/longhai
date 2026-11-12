@@ -4,9 +4,7 @@ COPY smart-salary-tracker/frontend/package*.json ./
 RUN npm install --no-audit --no-fund
 COPY smart-salary-tracker/frontend/ ./
 ARG VITE_API_URL=/api
-ARG VITE_ENABLE_DEMO_LOGIN=true
 ENV VITE_API_URL=$VITE_API_URL
-ENV VITE_ENABLE_DEMO_LOGIN=$VITE_ENABLE_DEMO_LOGIN
 RUN npm run build
 
 FROM node:22-trixie-slim AS backend-builder

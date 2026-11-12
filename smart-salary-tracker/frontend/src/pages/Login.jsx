@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { User, Lock, Eye, EyeOff, KeyRound, ShieldCheck, UserCheck } from 'lucide-react';
+import { User, Lock, Eye, EyeOff, KeyRound } from 'lucide-react';
 import { login } from '../services/authService';
 import BrandLogo from '../components/BrandLogo';
 import { useToast } from '../components/useToast';
@@ -16,8 +16,6 @@ export default function Login({ setUser }) {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
   const toast = useToast();
-
-  const showDemoHelpers = import.meta.env.VITE_ENABLE_DEMO_LOGIN !== 'false';
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -44,13 +42,6 @@ export default function Login({ setUser }) {
     } finally {
       setLoading(false);
     }
-  };
-
-  const fillDemoAccount = (demoId, demoPass, label) => {
-    setIdentifier(demoId);
-    setPassword(demoPass);
-    setError('');
-    toast.info(`Đã điền tài khoản ${label} (${demoId} / ${demoPass}). Nhấn "Đăng nhập" để vào.`, 'Tài khoản test');
   };
 
   return (
@@ -90,7 +81,7 @@ export default function Login({ setUser }) {
                 className="w-full pl-10 pr-4 py-2.5 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#0A192F] text-sm"
                 value={identifier}
                 onChange={(e) => setIdentifier(e.target.value)}
-                placeholder="VD: nv1, 0909123456 hoặc admin"
+                placeholder="Nhập tên đăng nhập, SĐT hoặc mã NV"
               />
             </div>
           </div>
@@ -151,43 +142,6 @@ export default function Login({ setUser }) {
             <em>Cài đặt</em> đổi lại mật khẩu mới.
           </p>
         </div>
-
-        {showDemoHelpers && (
-          <div className="pt-4 border-t border-slate-200 space-y-2.5">
-            <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500 text-center">
-              Điền nhanh tài khoản dùng thử
-            </div>
-            <div className="grid grid-cols-2 gap-2.5">
-              <button
-                type="button"
-                onClick={() => fillDemoAccount('nv1', '123456', 'Nhân viên')}
-                className="p-2.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-left transition cursor-pointer"
-              >
-                <div className="flex items-center gap-1.5 text-xs font-bold text-[#0A192F]">
-                  <UserCheck className="w-3.5 h-3.5 text-blue-600" />
-                  <span>Nhân viên mẫu</span>
-                </div>
-                <div className="text-[11px] text-slate-600 mt-0.5">
-                  TK: <strong>nv1</strong> • MK: <strong>123456</strong>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => fillDemoAccount('admin', 'admin123', 'Admin')}
-                className="p-2.5 rounded-xl border border-red-200 bg-red-50/70 hover:bg-red-100/70 text-left transition cursor-pointer"
-              >
-                <div className="flex items-center gap-1.5 text-xs font-bold text-[#E30613]">
-                  <ShieldCheck className="w-3.5 h-3.5" />
-                  <span>Quản trị Admin</span>
-                </div>
-                <div className="text-[11px] text-slate-700 mt-0.5">
-                  TK: <strong>admin</strong> • MK: <strong>admin123</strong>
-                </div>
-              </button>
-            </div>
-          </div>
-        )}
 
         <div className="pt-2 text-center border-t border-slate-100">
           <span className="text-sm text-slate-600">Nhân viên mới chưa có tài khoản? </span>

@@ -1,8 +1,14 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useOutletContext } from 'react-router-dom';
-import { getSchedules, saveSchedule, bulkSaveSchedule, deleteSchedule } from '../services/scheduleService';
-import { getShifts } from '../services/shiftService';
-import { getSettings } from '../services/settingsService';
+import {
+  getSchedules,
+  getCachedSchedules,
+  saveSchedule,
+  bulkSaveSchedule,
+  deleteSchedule,
+} from '../services/scheduleService';
+import { getShifts, getCachedShifts } from '../services/shiftService';
+import { getSettings, getCachedSettings } from '../services/settingsService';
 import { getDashboardData } from '../services/dashboardService';
 import { startOfMonth, endOfMonth, eachDayOfInterval, format, getDay, addDays } from 'date-fns';
 import {
@@ -65,10 +71,12 @@ export default function Schedule() {
 
   const [currentDate, setCurrentDate] = useState(() => new Date());
   const [todayStr] = useState(() => format(new Date(), 'yyyy-MM-dd'));
-  const [schedules, setSchedules] = useState([]);
-  const [shifts, setShifts] = useState([]);
-  const [hourRate, setHourRate] = useState(25529);
-  const [otRate, setOtRate] = useState(38293);
+  const [schedules, setSchedules] = useState(
+    () => getCachedSchedules(format(new Date(), 'MM'), format(new Date(), 'yyyy')) || []
+  );
+  const [shifts, setShifts] = useState(() => getCachedShifts() || []);
+  const [hourRate, setHourRate] = useState(() => Number(getCachedSettings()?.standard_hour_rate || 25529));
+  const [otRate, setOtRate] = useState(() => Number(getCachedSettings()?.overtime_rate || 38293));
 
   // Single day modal
   const [selectedDate, setSelectedDate] = useState(null);
@@ -121,13 +129,40 @@ export default function Schedule() {
   }, [currentDate, toast]);
 
   useEffect(() => {
-    void fetchData();
-  }, [fetchData]);
+    let active = true;
+    const m = format(currentDate, 'MM');
+    const y = format(currentDate, 'yyyy');
+    Promise.all([getSchedules(m, y), getShifts(), getSettings()])
+      .then(([schRes, shiftRes, settingsRes]) => {
+        if (!active) return;
+        setSchedules(schRes);
+        setShifts(shiftRes);
+        if (settingsRes?.standard_hour_rate) {
+          setHourRate(Number(settingsRes.standard_hour_rate));
+        }
+        if (settingsRes?.overtime_rate) {
+          setOtRate(Number(settingsRes.overtime_rate));
+        }
+      })
+      .catch(() => {
+        if (active && !getCachedSchedules(m, y)) {
+          toast.error('Không thể tải dữ liệu lịch trực.');
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [currentDate, toast]);
 
-  const handlePrevMonth = () =>
-    setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1));
-  const handleNextMonth = () =>
-    setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1));
+  const switchMonth = (offset) => {
+    const next = new Date(currentDate.getFullYear(), currentDate.getMonth() + offset, 1);
+    const cached = getCachedSchedules(format(next, 'MM'), format(next, 'yyyy'));
+    if (cached) setSchedules(cached);
+    setCurrentDate(next);
+  };
+
+  const handlePrevMonth = () => switchMonth(-1);
+  const handleNextMonth = () => switchMonth(1);
 
   const days = eachDayOfInterval({
     start: startOfMonth(currentDate),

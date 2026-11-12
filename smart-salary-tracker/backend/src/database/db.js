@@ -61,7 +61,10 @@ if (isPostgres) {
     const { Pool } = require('pg');
     pool = new Pool({
         connectionString: databaseUrl,
-        ssl: shouldUseSsl(databaseUrl)
+        ssl: shouldUseSsl(databaseUrl),
+        max: 10,
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 8000
     });
     db = {
         isPostgres: true,
@@ -168,19 +171,29 @@ function getStorageInfo() {
 }
 
 async function ensureUserDefaults(userId) {
-    const existingSettings = await dbGet('SELECT id FROM salary_settings WHERE user_id = ?', [userId]);
+    const [existingSettings, existingCats] = await Promise.all([
+        dbGet('SELECT id FROM salary_settings WHERE user_id = ?', [userId]),
+        dbGet('SELECT COUNT(*) as count FROM expense_categories WHERE user_id = ?', [userId])
+    ]);
+
+    const tasks = [];
     if (!existingSettings) {
-        await dbRun(
-            'INSERT INTO salary_settings (user_id, base_salary, standard_work_days, standard_hour_rate, overtime_rate, weekly_off_rate, holiday_rate) VALUES (?, ?, ?, ?, ?, ?, ?)',
-            [userId, 5310000, 26, 25529, 38293, 51058, 2]
+        tasks.push(
+            dbRun(
+                'INSERT INTO salary_settings (user_id, base_salary, standard_work_days, standard_hour_rate, overtime_rate, weekly_off_rate, holiday_rate) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                [userId, 5310000, 26, 25529, 38293, 51058, 2]
+            )
         );
     }
 
-    const existingCats = await dbGet('SELECT COUNT(*) as count FROM expense_categories WHERE user_id = ?', [userId]);
     if (!existingCats || Number(existingCats.count || 0) === 0) {
         for (const cat of DEFAULT_EXPENSE_CATEGORIES) {
-            await dbRun('INSERT INTO expense_categories (user_id, name, icon) VALUES (?, ?, ?)', [userId, cat, '']);
+            tasks.push(dbRun('INSERT INTO expense_categories (user_id, name, icon) VALUES (?, ?, ?)', [userId, cat, '']));
         }
+    }
+
+    if (tasks.length > 0) {
+        await Promise.all(tasks);
     }
 }
 
@@ -254,14 +267,19 @@ async function seedShifts() {
         { code: 'Nghỉ', name: 'Nghỉ', hours: 0, reg: 0, ot: 0 }
     ];
 
-    for (const s of shifts) {
-        const existing = await dbGet('SELECT id FROM shifts WHERE user_id IS NULL AND code = ?', [s.code]);
-        if (!existing) {
-            await dbRun(
-                'INSERT INTO shifts (code, name, total_hours, regular_hours, overtime_hours) VALUES (?, ?, ?, ?, ?)',
-                [s.code, s.name, s.hours, s.reg, s.ot]
-            );
-        }
+    const existingRows = await dbAll('SELECT code FROM shifts WHERE user_id IS NULL');
+    const existingCodes = new Set(existingRows.map((r) => r.code));
+    const missing = shifts.filter((s) => !existingCodes.has(s.code));
+
+    if (missing.length > 0) {
+        await Promise.all(
+            missing.map((s) =>
+                dbRun(
+                    'INSERT INTO shifts (code, name, total_hours, regular_hours, overtime_hours) VALUES (?, ?, ?, ?, ?)',
+                    [s.code, s.name, s.hours, s.reg, s.ot]
+                )
+            )
+        );
     }
 }
 
@@ -310,17 +328,38 @@ async function seedDemoUsers() {
     }
 }
 
+async function ensurePerformanceIndexes() {
+    const statements = [
+        'CREATE INDEX IF NOT EXISTS idx_work_schedules_user_date ON work_schedules(user_id, work_date)',
+        'CREATE INDEX IF NOT EXISTS idx_expenses_user_date ON expenses(user_id, expense_date)',
+        'CREATE INDEX IF NOT EXISTS idx_salary_adjustments_user_date ON salary_adjustments(user_id, adjustment_date)',
+        'CREATE INDEX IF NOT EXISTS idx_salary_settings_user ON salary_settings(user_id)',
+        'CREATE INDEX IF NOT EXISTS idx_expense_categories_user ON expense_categories(user_id)'
+    ];
+    for (const sql of statements) {
+        try {
+            await dbRun(sql);
+        } catch {
+            // Skip index creation on partial test schemas without that table
+        }
+    }
+}
+
 async function initializeDatabase() {
     if (!isPostgres) {
         await dbRun('PRAGMA foreign_keys = ON');
         await dbRun('PRAGMA busy_timeout = 5000');
+        await dbRun('PRAGMA journal_mode = WAL');
+        await dbRun('PRAGMA synchronous = NORMAL');
+        await dbRun('PRAGMA temp_store = MEMORY');
+        await dbRun('PRAGMA cache_size = -16000');
     }
     const schema = fs.readFileSync(schemaPath, 'utf8');
     await dbExec(schema);
 
     await migrateUsersTable();
-    await seedShifts();
-    await seedDemoUsers();
+    await ensurePerformanceIndexes();
+    await Promise.all([seedShifts(), seedDemoUsers()]);
 }
 
 const initPromise = initializeDatabase().catch((err) => {

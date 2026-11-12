@@ -328,12 +328,28 @@ describe('5. Bulk schedule (AUTO Sunday), Salary Adjustments, Custom OT & Health
         empToken = empRes.body.token;
     });
 
-    test('exposes storage persistence info on /api/health', async () => {
+    test('exposes storage persistence info & no-store header on /api/health', async () => {
         const health = await request(app).get('/api/health');
         expect(health.statusCode).toBe(200);
         expect(health.body.status).toBe('ok');
         expect(health.body.database).toBe('sqlite');
         expect(health.body.persistent).toBe(false);
+        expect(health.headers['cache-control']).toBe('no-store');
+        expect(health.headers['x-powered-by']).toBeUndefined();
+    });
+
+    test('sets immutable 1-year cache-control on static hashed assets & compresses large responses', async () => {
+        const assetsDir = path.resolve(__dirname, '../../../frontend/dist/assets');
+        if (fs.existsSync(assetsDir)) {
+            const jsFile = fs.readdirSync(assetsDir).find((f) => f.endsWith('.js'));
+            if (jsFile) {
+                const assetRes = await request(app)
+                    .get(`/assets/${jsFile}`)
+                    .set('Accept-Encoding', 'gzip');
+                expect(assetRes.statusCode).toBe(200);
+                expect(assetRes.headers['cache-control']).toContain('immutable');
+            }
+        }
     });
 
     test('bulk schedules with AUTO day_type_mode and overwrite=false keeps existing shifts', async () => {

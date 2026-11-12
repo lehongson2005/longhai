@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useOutletContext } from 'react-router-dom';
-import { getSettings, updateSettings } from '../services/settingsService';
+import { getSettings, getCachedSettings, updateSettings } from '../services/settingsService';
 import { changePassword } from '../services/authService';
 import { Calculator, Save, Lock, Eye, EyeOff } from 'lucide-react';
 import { useToast } from '../components/useToast';
@@ -8,15 +8,19 @@ import { useToast } from '../components/useToast';
 export default function Settings() {
   const outletContext = useOutletContext() || {};
   const user = outletContext.user;
-  const [settings, setSettings] = useState({
-    base_salary: '',
-    standard_work_days: '',
-    standard_hour_rate: '',
-    overtime_rate: '',
-    weekly_off_rate: '',
-    holiday_rate: '',
-  });
-  const [loading, setLoading] = useState(true);
+  const cachedSettings = getCachedSettings();
+  const [settings, setSettings] = useState(
+    () =>
+      cachedSettings || {
+        base_salary: '',
+        standard_work_days: '',
+        standard_hour_rate: '',
+        overtime_rate: '',
+        weekly_off_rate: '',
+        holiday_rate: '',
+      }
+  );
+  const [loading, setLoading] = useState(() => !cachedSettings);
   const [saving, setSaving] = useState(false);
 
   // Change password state

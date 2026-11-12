@@ -21,6 +21,7 @@ exports.getShifts = async (req, res) => {
              END, id ASC`,
             [req.userId]
         );
+        res.setHeader('Cache-Control', 'private, max-age=300');
         res.json(shifts);
     } catch (error) {
         res.status(500).json({ message: 'Lỗi tải danh sách ca trực' });

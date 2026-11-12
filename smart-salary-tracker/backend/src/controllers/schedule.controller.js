@@ -132,47 +132,65 @@ exports.bulkCreateOrUpdateSchedule = async (req, res) => {
 
         const uniqueDates = Array.from(
             new Set(dates.map((d) => String(d).trim()).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)))
-        );
+        ).sort();
         if (uniqueDates.length === 0) {
             return res.status(400).json({ message: 'Danh sách ngày làm việc không hợp lệ' });
         }
 
-        const shift = await dbGet('SELECT id, code, total_hours FROM shifts WHERE id = ?', [shift_id]);
+        const minDate = uniqueDates[0];
+        const maxDate = uniqueDates[uniqueDates.length - 1];
+
+        const [shift, existingRows] = await Promise.all([
+            dbGet('SELECT id, code, total_hours FROM shifts WHERE id = ?', [shift_id]),
+            dbAll('SELECT id, work_date FROM work_schedules WHERE user_id = ? AND work_date >= ? AND work_date <= ?', [
+                req.userId,
+                minDate,
+                maxDate
+            ])
+        ]);
+
         if (!shift) {
             return res.status(404).json({ message: 'Ca trực không tồn tại' });
         }
 
+        const existingByDate = new Map(existingRows.map((row) => [row.work_date, row.id]));
         const cleanNotes = String(notes || '').trim();
         let createdCount = 0;
         let updatedCount = 0;
         let skippedCount = 0;
 
+        const ops = [];
         for (const workDate of uniqueDates) {
             const resolvedDayType = day_type_mode === 'AUTO' ? resolveAutoDayType(workDate) : day_type_mode;
-            const existing = await dbGet('SELECT id FROM work_schedules WHERE user_id = ? AND work_date = ?', [
-                req.userId,
-                workDate
-            ]);
+            const existingId = existingByDate.get(workDate);
 
-            if (existing) {
+            if (existingId) {
                 if (!overwrite) {
                     skippedCount += 1;
                     continue;
                 }
-                await dbRun('UPDATE work_schedules SET shift_id = ?, day_type = ?, notes = ? WHERE id = ?', [
-                    shift.id,
-                    resolvedDayType,
-                    cleanNotes,
-                    existing.id
-                ]);
                 updatedCount += 1;
-            } else {
-                await dbRun(
-                    'INSERT INTO work_schedules (user_id, work_date, shift_id, day_type, notes) VALUES (?, ?, ?, ?, ?)',
-                    [req.userId, workDate, shift.id, resolvedDayType, cleanNotes]
+                ops.push(
+                    dbRun('UPDATE work_schedules SET shift_id = ?, day_type = ?, notes = ? WHERE id = ?', [
+                        shift.id,
+                        resolvedDayType,
+                        cleanNotes,
+                        existingId
+                    ])
                 );
+            } else {
                 createdCount += 1;
+                ops.push(
+                    dbRun(
+                        'INSERT INTO work_schedules (user_id, work_date, shift_id, day_type, notes) VALUES (?, ?, ?, ?, ?)',
+                        [req.userId, workDate, shift.id, resolvedDayType, cleanNotes]
+                    )
+                );
             }
+        }
+
+        if (ops.length > 0) {
+            await Promise.all(ops);
         }
 
         const savedCount = createdCount + updatedCount;

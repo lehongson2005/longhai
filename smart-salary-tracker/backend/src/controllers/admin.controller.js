@@ -38,9 +38,15 @@ exports.listUsers = async (req, res) => {
                 u.role,
                 u.created_at,
                 u.updated_at,
-                (SELECT COUNT(*) FROM work_schedules ws WHERE ws.user_id = u.id) as schedule_count,
-                (SELECT COUNT(*) FROM expenses ex WHERE ex.user_id = u.id) as expense_count
+                COALESCE(ws_cnt.cnt, 0) as schedule_count,
+                COALESCE(ex_cnt.cnt, 0) as expense_count
             FROM users u
+            LEFT JOIN (
+                SELECT user_id, COUNT(*) as cnt FROM work_schedules GROUP BY user_id
+            ) ws_cnt ON ws_cnt.user_id = u.id
+            LEFT JOIN (
+                SELECT user_id, COUNT(*) as cnt FROM expenses GROUP BY user_id
+            ) ex_cnt ON ex_cnt.user_id = u.id
         `;
         const params = [];
 

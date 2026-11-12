@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   getExpenses,
+  getCachedExpenses,
   getCategories,
+  getCachedCategories,
   createExpense,
   updateExpense,
   deleteExpense,
@@ -23,14 +25,16 @@ function formatDateVN(dateStr) {
 }
 
 export default function Expenses() {
-  const [expenses, setExpenses] = useState([]);
-  const [categories, setCategories] = useState([]);
   const [currentDate, setCurrentDate] = useState(() => new Date());
+  const [expenses, setExpenses] = useState(
+    () => getCachedExpenses(format(new Date(), 'MM'), format(new Date(), 'yyyy')) || []
+  );
+  const [categories, setCategories] = useState(() => getCachedCategories() || []);
 
   // Inline Form State (always visible with prominent Save button)
   const [editingId, setEditingId] = useState(null);
   const [amount, setAmount] = useState('');
-  const [categoryId, setCategoryId] = useState('');
+  const [categoryId, setCategoryId] = useState(() => getCachedCategories()?.[0]?.id || '');
   const [note, setNote] = useState('');
   const [expenseDate, setExpenseDate] = useState(() => format(new Date(), 'yyyy-MM-dd'));
   const [saving, setSaving] = useState(false);
@@ -57,13 +61,37 @@ export default function Expenses() {
   }, [currentDate, toast]);
 
   useEffect(() => {
-    void fetchData();
-  }, [fetchData]);
+    let active = true;
+    const m = format(currentDate, 'MM');
+    const y = format(currentDate, 'yyyy');
+    Promise.all([getExpenses(m, y), getCategories()])
+      .then(([expRes, catRes]) => {
+        if (!active) return;
+        setExpenses(expRes);
+        setCategories(catRes);
+        if (catRes.length > 0) {
+          setCategoryId((prev) => prev || catRes[0].id);
+        }
+      })
+      .catch(() => {
+        if (active && !getCachedExpenses(m, y)) {
+          toast.error('Không thể tải dữ liệu chi tiêu.');
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [currentDate, toast]);
 
-  const handlePrevMonth = () =>
-    setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1));
-  const handleNextMonth = () =>
-    setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1));
+  const switchMonth = (offset) => {
+    const next = new Date(currentDate.getFullYear(), currentDate.getMonth() + offset, 1);
+    const cached = getCachedExpenses(format(next, 'MM'), format(next, 'yyyy'));
+    if (cached) setExpenses(cached);
+    setCurrentDate(next);
+  };
+
+  const handlePrevMonth = () => switchMonth(-1);
+  const handleNextMonth = () => switchMonth(1);
 
   const formatVND = (val) =>
     new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(val || 0);

@@ -99,3 +99,5 @@ CREATE TABLE IF NOT EXISTS financial_goals (
 CREATE INDEX IF NOT EXISTS idx_work_schedules_user_date ON work_schedules(user_id, work_date);
 CREATE INDEX IF NOT EXISTS idx_expenses_user_date ON expenses(user_id, expense_date);
 CREATE INDEX IF NOT EXISTS idx_salary_adjustments_user_date ON salary_adjustments(user_id, adjustment_date);
+CREATE INDEX IF NOT EXISTS idx_salary_settings_user ON salary_settings(user_id);
+CREATE INDEX IF NOT EXISTS idx_expense_categories_user ON expense_categories(user_id);

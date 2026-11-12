@@ -3,6 +3,7 @@ import { Home, Calendar, Wallet, Settings, LogOut, Shield } from 'lucide-react';
 import { logout } from '../services/authService';
 import BrandLogo from '../components/BrandLogo';
 import { useToast } from '../components/useToast';
+import { prefetchRoute } from '../utils/routePrefetch';
 
 export default function MainLayout({ user, setUser }) {
   const location = useLocation();
@@ -47,6 +48,8 @@ export default function MainLayout({ user, setUser }) {
               <Link
                 key={item.path}
                 to={item.path}
+                onMouseEnter={() => prefetchRoute(item.path)}
+                onTouchStart={() => prefetchRoute(item.path)}
                 className={`flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm transition-colors ${
                   isActive
                     ? 'bg-[#0A192F] text-white font-bold shadow-xs'
@@ -127,6 +130,8 @@ export default function MainLayout({ user, setUser }) {
             <Link
               key={item.path}
               to={item.path}
+              onMouseEnter={() => prefetchRoute(item.path)}
+              onTouchStart={() => prefetchRoute(item.path)}
               className={`flex flex-col items-center justify-center py-1.5 rounded-xl transition ${
                 isActive ? 'text-[#E30613] bg-red-50/70 font-bold' : 'text-slate-500 font-medium'
               }`}

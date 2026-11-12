@@ -15,7 +15,7 @@ import {
   Copy,
   X,
 } from 'lucide-react';
-import { getDashboardData } from '../services/dashboardService';
+import { getDashboardData, getCachedDashboard } from '../services/dashboardService';
 import { getSchedules } from '../services/scheduleService';
 import { createAdjustment, deleteAdjustment } from '../services/adjustmentService';
 import { useToast } from '../components/useToast';
@@ -37,11 +37,11 @@ export default function Dashboard() {
   const user = outletContext.user;
   const toast = useToast();
 
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [currentMonthDate, setCurrentMonthDate] = useState(() => new Date());
   const [todayDate] = useState(() => new Date());
+  const [currentMonthDate, setCurrentMonthDate] = useState(() => new Date());
+  const [data, setData] = useState(() => getCachedDashboard(new Date()));
+  const [loading, setLoading] = useState(() => !getCachedDashboard(new Date()));
+  const [error, setError] = useState('');
 
   // Allowance / Deduction Modal
   const [adjModalOpen, setAdjModalOpen] = useState(false);
@@ -68,20 +68,43 @@ export default function Dashboard() {
       setData(res);
       setError('');
     } catch {
-      setError('Không thể tải dữ liệu tổng quan.');
+      setError((prev) => (data ? prev : 'Không thể tải dữ liệu tổng quan.'));
     } finally {
       setLoading(false);
     }
-  }, [currentMonthDate, todayDate]);
+  }, [currentMonthDate, todayDate, data]);
 
   useEffect(() => {
-    void loadDashboard();
-  }, [loadDashboard]);
+    let active = true;
+    getDashboardData(todayDate, currentMonthDate)
+      .then((res) => {
+        if (active) {
+          setData(res);
+          setError('');
+        }
+      })
+      .catch(() => {
+        if (active && !getCachedDashboard(currentMonthDate)) {
+          setError('Không thể tải dữ liệu tổng quan.');
+        }
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [currentMonthDate, todayDate]);
 
-  const handlePrevMonth = () =>
-    setCurrentMonthDate(new Date(currentMonthDate.getFullYear(), currentMonthDate.getMonth() - 1, 1));
-  const handleNextMonth = () =>
-    setCurrentMonthDate(new Date(currentMonthDate.getFullYear(), currentMonthDate.getMonth() + 1, 1));
+  const switchMonth = (offset) => {
+    const next = new Date(currentMonthDate.getFullYear(), currentMonthDate.getMonth() + offset, 1);
+    const cached = getCachedDashboard(next);
+    if (cached) setData(cached);
+    setCurrentMonthDate(next);
+  };
+
+  const handlePrevMonth = () => switchMonth(-1);
+  const handleNextMonth = () => switchMonth(1);
 
   const formatVND = (amount) =>
     new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(amount || 0);
@@ -237,10 +260,23 @@ export default function Dashboard() {
       </div>
 
       {loading && !data ? (
-        <div className="bg-white rounded-2xl border border-slate-200 p-10 text-center text-slate-500">
-          Đang tải dữ liệu...
+        <div className="space-y-4 animate-pulse">
+          <div className="bg-white rounded-2xl border border-slate-200 p-5 space-y-3">
+            <div className="h-4 w-40 bg-slate-200 rounded" />
+            <div className="grid grid-cols-3 gap-3">
+              <div className="h-16 bg-slate-100 rounded-xl" />
+              <div className="h-16 bg-slate-100 rounded-xl" />
+              <div className="h-16 bg-slate-100 rounded-xl" />
+            </div>
+          </div>
+          <div className="bg-white rounded-2xl border border-slate-200 p-5 space-y-3">
+            <div className="h-5 w-48 bg-slate-200 rounded" />
+            <div className="h-10 bg-slate-100 rounded-xl" />
+            <div className="h-10 bg-slate-100 rounded-xl" />
+            <div className="h-12 bg-slate-100 rounded-xl" />
+          </div>
         </div>
-      ) : error ? (
+      ) : error && !data ? (
         <div className="bg-red-50 border border-red-200 text-red-700 rounded-2xl p-6 text-center text-sm">
           {error}
         </div>

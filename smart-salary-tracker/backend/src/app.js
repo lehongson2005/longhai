@@ -20,7 +20,7 @@ app.disable('x-powered-by');
 
 app.use(compression({ threshold: 512 }));
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);

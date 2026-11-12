@@ -1,4 +1,4 @@
-const { dbRun, dbAll, getMonthDateRange } = require('../database/db');
+const { dbRun, dbAll, getMonthDateRange, parsePositiveInt } = require('../database/db');
 
 const VALID_TYPES = ['ALLOWANCE', 'DEDUCTION'];
 
@@ -68,7 +68,10 @@ exports.createAdjustment = async (req, res) => {
 
 exports.deleteAdjustment = async (req, res) => {
     try {
-        const { id } = req.params;
+        const id = parsePositiveInt(req.params.id);
+        if (!id) {
+            return res.status(400).json({ message: 'ID điều chỉnh lương không hợp lệ' });
+        }
         const result = await dbRun('DELETE FROM salary_adjustments WHERE id = ? AND user_id = ?', [id, req.userId]);
         if (result.changes === 0) {
             return res.status(404).json({ message: 'Không tìm thấy khoản cần xóa' });

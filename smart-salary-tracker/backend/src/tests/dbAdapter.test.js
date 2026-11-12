@@ -1,4 +1,11 @@
-const { convertPlaceholders, getMonthDateRange, shouldUseSsl, getStorageInfo } = require('../database/db');
+const {
+    convertPlaceholders,
+    getMonthDateRange,
+    shouldUseSsl,
+    normalizePgConnectionString,
+    parsePositiveInt,
+    getStorageInfo
+} = require('../database/db');
 
 describe('Database dual-driver utilities & date ranges', () => {
     test('converts ? placeholders to $1, $2... while ignoring quoted question marks', () => {
@@ -29,5 +36,26 @@ describe('Database dual-driver utilities & date ranges', () => {
 
     test('reports sqlite non-persistent storage by default when DATABASE_URL is unset', () => {
         expect(getStorageInfo()).toEqual({ driver: 'sqlite', persistent: false });
+    });
+
+    test('normalizes hosted PostgreSQL URLs to sslmode=no-verify when SSL is enabled', () => {
+        expect(
+            normalizePgConnectionString('postgresql://user:pass@ep-cool.aws.neon.tech/neondb?sslmode=require')
+        ).toBe('postgresql://user:pass@ep-cool.aws.neon.tech/neondb?sslmode=no-verify');
+        expect(
+            normalizePgConnectionString('postgresql://user:pass@localhost:5432/longhai?sslmode=require')
+        ).toBe('postgresql://user:pass@localhost:5432/longhai?sslmode=require');
+        expect(
+            normalizePgConnectionString('postgresql://user:pass@ep-cool.aws.neon.tech/neondb?sslmode=verify-full')
+        ).toBe('postgresql://user:pass@ep-cool.aws.neon.tech/neondb?sslmode=verify-full');
+    });
+
+    test('parses strict positive integer IDs and rejects invalid route params', () => {
+        expect(parsePositiveInt('42')).toBe(42);
+        expect(parsePositiveInt(7)).toBe(7);
+        expect(parsePositiveInt('0')).toBeNull();
+        expect(parsePositiveInt('-3')).toBeNull();
+        expect(parsePositiveInt('abc')).toBeNull();
+        expect(parsePositiveInt('12.5')).toBeNull();
     });
 });

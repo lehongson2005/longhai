@@ -30,3 +30,13 @@ export const deleteAdminUser = async (id) => {
     const response = await api.delete(`/admin/users/${id}`);
     return response.data;
 };
+
+export const exportAdminBackup = async () => {
+    const response = await api.get('/admin/backup');
+    return response.data;
+};
+
+export const importAdminBackup = async (backupPayload) => {
+    const response = await api.post('/admin/restore', backupPayload);
+    return response.data;
+};

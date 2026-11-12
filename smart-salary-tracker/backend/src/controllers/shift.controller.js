@@ -1,4 +1,4 @@
-const { dbRun, dbAll, dbGet } = require('../database/db');
+const { dbRun, dbAll, dbGet, parsePositiveInt } = require('../database/db');
 
 exports.getShifts = async (req, res) => {
     try {
@@ -46,7 +46,10 @@ exports.createShift = async (req, res) => {
 
 exports.updateShift = async (req, res) => {
     try {
-        const { id } = req.params;
+        const id = parsePositiveInt(req.params.id);
+        if (!id) {
+            return res.status(400).json({ message: 'ID ca trực không hợp lệ' });
+        }
         const { code, name, total_hours, regular_hours, overtime_hours, is_active } = req.body;
 
         const shift = await dbGet('SELECT * FROM shifts WHERE id = ?', [id]);
@@ -54,7 +57,7 @@ exports.updateShift = async (req, res) => {
             return res.status(404).json({ message: 'Không tìm thấy ca trực' });
         }
 
-        if (shift.user_id !== req.userId) {
+        if (Number(shift.user_id) !== Number(req.userId)) {
             return res.status(403).json({ message: 'Không thể sửa ca trực mặc định' });
         }
 

@@ -1,4 +1,4 @@
-const { dbRun, dbAll, dbGet, getMonthDateRange } = require('../database/db');
+const { dbRun, dbAll, dbGet, getMonthDateRange, parsePositiveInt } = require('../database/db');
 
 async function resolveCategoryId(rawCategoryId, userId) {
     if (rawCategoryId === undefined || rawCategoryId === null || String(rawCategoryId).trim() === '') {
@@ -81,7 +81,10 @@ exports.createExpense = async (req, res) => {
 
 exports.updateExpense = async (req, res) => {
     try {
-        const { id } = req.params;
+        const id = parsePositiveInt(req.params.id);
+        if (!id) {
+            return res.status(400).json({ message: 'ID khoản chi tiêu không hợp lệ' });
+        }
         const { expense_date, amount, category_id, note = '' } = req.body;
         const parsedAmount = Number(amount);
 
@@ -112,7 +115,10 @@ exports.updateExpense = async (req, res) => {
 
 exports.deleteExpense = async (req, res) => {
     try {
-        const { id } = req.params;
+        const id = parsePositiveInt(req.params.id);
+        if (!id) {
+            return res.status(400).json({ message: 'ID khoản chi tiêu không hợp lệ' });
+        }
         const result = await dbRun('DELETE FROM expenses WHERE id = ? AND user_id = ?', [id, req.userId]);
         if (result.changes === 0) {
             return res.status(404).json({ message: 'Không tìm thấy khoản chi tiêu' });

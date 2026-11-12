@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   Users,
@@ -11,6 +11,10 @@ import {
   Calculator,
   X,
   Database,
+  Download,
+  Upload,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import BrandLogo from '../../components/BrandLogo';
 import { logout } from '../../services/authService';
@@ -20,7 +24,10 @@ import {
   createAdminUser,
   resetUserPassword,
   deleteAdminUser,
+  exportAdminBackup,
+  importAdminBackup,
 } from '../../services/adminService';
+import { clearAllCache } from '../../utils/fastCache';
 import { useToast } from '../../components/useToast';
 import ConfirmDialog from '../../components/ConfirmDialog';
 
@@ -49,6 +56,13 @@ export default function AdminDashboard({ user, setUser }) {
   const [resetting, setResetting] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleting, setDeleting] = useState(false);
+
+  // Backup & Restore State
+  const fileInputRef = useRef(null);
+  const [exporting, setExporting] = useState(false);
+  const [restorePreview, setRestorePreview] = useState(null);
+  const [restoring, setRestoring] = useState(false);
+  const [showGuide, setShowGuide] = useState(false);
 
   const loadData = useCallback(
     async (q = search) => {
@@ -124,6 +138,74 @@ export default function AdminDashboard({ user, setUser }) {
     }
   };
 
+  const handleExportBackup = async () => {
+    setExporting(true);
+    try {
+      const backup = await exportAdminBackup();
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const todayStr = new Date().toISOString().slice(0, 10);
+      a.href = url;
+      a.download = `longhai-backup-${todayStr}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success(
+        `Đã tải file sao lưu gồm ${backup?.data?.users?.length || 0} tài khoản và ${
+          backup?.data?.work_schedules?.length || 0
+        } ca trực.`
+      );
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Không thể tải bản sao lưu.');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleSelectBackupFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      const data = parsed?.data || parsed;
+      if (!data || !Array.isArray(data.users) || data.users.length === 0) {
+        toast.error('File sao lưu không hợp lệ hoặc không có tài khoản nào.');
+        return;
+      }
+      setRestorePreview({
+        fileName: file.name,
+        payload: parsed,
+        summary: {
+          users: data.users.length,
+          schedules: Array.isArray(data.work_schedules) ? data.work_schedules.length : 0,
+          expenses: Array.isArray(data.expenses) ? data.expenses.length : 0,
+        },
+      });
+    } catch {
+      toast.error('Không đọc được file JSON. Vui lòng chọn đúng file sao lưu .json.');
+    }
+  };
+
+  const handleConfirmRestore = async () => {
+    if (!restorePreview) return;
+    setRestoring(true);
+    try {
+      const res = await importAdminBackup(restorePreview.payload);
+      clearAllCache();
+      toast.success(res.message || 'Khôi phục dữ liệu thành công!', 'Đã khôi phục');
+      setRestorePreview(null);
+      await loadData();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Lỗi khi khôi phục dữ liệu sao lưu.');
+    } finally {
+      setRestoring(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-50">
       {/* Top Bar */}
@@ -195,32 +277,100 @@ export default function AdminDashboard({ user, setUser }) {
         {/* Database Persistence Status Banner */}
         {stats?.storage && (
           <div
-            className={`rounded-2xl p-4 border flex items-start gap-3 text-xs sm:text-sm ${
+            className={`rounded-2xl p-4 border text-xs sm:text-sm space-y-3 ${
               stats.storage.persistent
                 ? 'bg-emerald-50 border-emerald-200 text-emerald-950'
                 : 'bg-sky-50 border-sky-200 text-sky-950'
             }`}
           >
-            <Database
-              className={`w-5 h-5 shrink-0 mt-0.5 ${
-                stats.storage.persistent ? 'text-emerald-600' : 'text-sky-600'
-              }`}
-            />
-            <div>
-              {stats.storage.persistent ? (
-                <>
-                  <strong>Lưu trữ bền vững ({stats.storage.driver.toUpperCase()}):</strong> Tài khoản, ca trực và chi tiêu
-                  được lưu vĩnh viễn, không bị mất khi cập nhật hoặc khởi động lại.
-                </>
-              ) : (
-                <>
-                  <strong>Chế độ lưu trữ SQLite (dùng để test):</strong> Nếu chạy trên Render gói Free, dữ liệu mới tạo sẽ
-                  tự reset về mặc định khi deploy lại hoặc server ngủ. Để lưu vĩnh viễn, hãy gắn biến môi trường{' '}
-                  <code className="px-1.5 py-0.5 rounded bg-sky-100 font-bold">DATABASE_URL</code> (PostgreSQL miễn phí
-                  Neon / Supabase) trong Render → Environment.
-                </>
-              )}
+            <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <Database
+                  className={`w-5 h-5 shrink-0 mt-0.5 ${
+                    stats.storage.persistent ? 'text-emerald-600' : 'text-sky-600'
+                  }`}
+                />
+                <div>
+                  {stats.storage.persistent ? (
+                    <>
+                      <strong>Lưu trữ bền vững ({stats.storage.driver.toUpperCase()}):</strong> Tài khoản, ca trực và
+                      chi tiêu được lưu trên cloud, không bị mất khi cập nhật hoặc khởi động lại.
+                    </>
+                  ) : (
+                    <>
+                      <strong>Chế độ lưu trữ SQLite (dùng để test):</strong> Nếu chạy trên Render gói Free, dữ liệu
+                      mới tạo sẽ tự reset khi deploy lại hoặc server ngủ. Hãy gắn biến{' '}
+                      <code className="px-1.5 py-0.5 rounded bg-sky-100 font-bold">DATABASE_URL</code> để lưu vĩnh viễn
+                      0đ hoặc tải file sao lưu bên cạnh.
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleExportBackup}
+                  disabled={exporting}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-slate-300 hover:bg-slate-100 text-slate-800 text-xs font-bold cursor-pointer disabled:opacity-60"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>{exporting ? 'Đang xuất...' : 'Tải sao lưu (.json)'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-slate-300 hover:bg-slate-100 text-slate-800 text-xs font-bold cursor-pointer"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>Khôi phục file</span>
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".json,application/json"
+                  onChange={handleSelectBackupFile}
+                  className="hidden"
+                />
+
+                {!stats.storage.persistent && (
+                  <button
+                    type="button"
+                    onClick={() => setShowGuide((v) => !v)}
+                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-[#0A192F] text-white text-xs font-bold cursor-pointer"
+                  >
+                    <span>Hướng dẫn lưu vĩnh viễn</span>
+                    {showGuide ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                  </button>
+                )}
+              </div>
             </div>
+
+            {!stats.storage.persistent && showGuide && (
+              <div className="bg-white/85 rounded-xl border border-sky-200 p-3.5 text-xs text-slate-700 space-y-1.5 leading-relaxed">
+                <div className="font-bold text-[#0A192F]">
+                  3 bước bật lưu vĩnh viễn 0đ (Neon PostgreSQL + Render đang chạy):
+                </div>
+                <ol className="list-decimal list-inside space-y-1">
+                  <li>
+                    Vào <strong>neon.tech</strong> → Đăng nhập bằng GitHub/Google → bấm <strong>New Project</strong>{' '}
+                    (chọn vùng <strong>Singapore</strong>, gói Free miễn phí vĩnh viễn 1 GB).
+                  </li>
+                  <li>
+                    Trong màn hình Connect của Neon, copy dòng <strong>Connection string</strong> (dạng{' '}
+                    <code className="px-1 py-0.5 bg-slate-100 rounded">postgresql://...</code>).
+                  </li>
+                  <li>
+                    Vào <strong>Render Dashboard</strong> → chọn web service → mục <strong>Environment</strong> →{' '}
+                    <strong>Add Environment Variable</strong>: Key là{' '}
+                    <code className="px-1 py-0.5 bg-slate-100 rounded font-bold">DATABASE_URL</code>, Value là chuỗi vừa
+                    copy → <strong>Save Changes</strong>. Nếu trước đó đã có dữ liệu test, bấm{' '}
+                    <strong>Khôi phục file</strong> để nạp lại chỉ trong 1 giây.
+                  </li>
+                </ol>
+              </div>
+            )}
           </div>
         )}
 
@@ -461,6 +611,22 @@ export default function AdminDashboard({ user, setUser }) {
         loading={deleting}
         onConfirm={handleConfirmDelete}
         onCancel={() => setDeleteTarget(null)}
+      />
+
+      {/* Confirm Restore Backup */}
+      <ConfirmDialog
+        open={Boolean(restorePreview)}
+        variant="primary"
+        title="Khôi phục dữ liệu từ file sao lưu?"
+        description={
+          restorePreview
+            ? `File "${restorePreview.fileName}" có ${restorePreview.summary.users} tài khoản, ${restorePreview.summary.schedules} ca trực và ${restorePreview.summary.expenses} khoản chi tiêu. Hệ thống sẽ cập nhật và bổ sung dữ liệu an toàn mà không làm mất phiên Admin hiện tại.`
+            : ''
+        }
+        confirmLabel="Khôi phục ngay"
+        loading={restoring}
+        onConfirm={handleConfirmRestore}
+        onCancel={() => setRestorePreview(null)}
       />
     </div>
   );

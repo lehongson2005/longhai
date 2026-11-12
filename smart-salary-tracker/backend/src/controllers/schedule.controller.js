@@ -1,4 +1,4 @@
-const { dbRun, dbAll, dbGet, getMonthDateRange } = require('../database/db');
+const { dbRun, dbAll, dbGet, getMonthDateRange, parsePositiveInt } = require('../database/db');
 const { calculateShiftSalary } = require('../utils/salaryCalculator');
 
 const VALID_DAY_TYPES = ['NORMAL', 'WEEKLY_OFF', 'HOLIDAY'];
@@ -69,14 +69,15 @@ exports.createOrUpdateSchedule = async (req, res) => {
         if (!work_date || !/^\d{4}-\d{2}-\d{2}$/.test(String(work_date))) {
             return res.status(400).json({ message: 'Ngày làm việc không hợp lệ' });
         }
-        if (!shift_id) {
-            return res.status(400).json({ message: 'Vui lòng chọn ca trực' });
+        const parsedShiftId = parsePositiveInt(shift_id);
+        if (!parsedShiftId) {
+            return res.status(400).json({ message: 'Vui lòng chọn ca trực hợp lệ' });
         }
         if (!VALID_DAY_TYPES.includes(day_type)) {
             return res.status(400).json({ message: 'Loại ngày không hợp lệ' });
         }
 
-        const shift = await dbGet('SELECT id, code, total_hours FROM shifts WHERE id = ?', [shift_id]);
+        const shift = await dbGet('SELECT id, code, total_hours FROM shifts WHERE id = ?', [parsedShiftId]);
         if (!shift) {
             return res.status(404).json({ message: 'Ca trực không tồn tại' });
         }
@@ -123,8 +124,9 @@ exports.bulkCreateOrUpdateSchedule = async (req, res) => {
         if (dates.length > 62) {
             return res.status(400).json({ message: 'Mỗi lần chỉ chấm tối đa 62 ngày' });
         }
-        if (!shift_id) {
-            return res.status(400).json({ message: 'Vui lòng chọn ca trực' });
+        const parsedShiftId = parsePositiveInt(shift_id);
+        if (!parsedShiftId) {
+            return res.status(400).json({ message: 'Vui lòng chọn ca trực hợp lệ' });
         }
         if (!VALID_BULK_MODES.includes(day_type_mode)) {
             return res.status(400).json({ message: 'Chế độ loại ngày không hợp lệ' });
@@ -141,7 +143,7 @@ exports.bulkCreateOrUpdateSchedule = async (req, res) => {
         const maxDate = uniqueDates[uniqueDates.length - 1];
 
         const [shift, existingRows] = await Promise.all([
-            dbGet('SELECT id, code, total_hours FROM shifts WHERE id = ?', [shift_id]),
+            dbGet('SELECT id, code, total_hours FROM shifts WHERE id = ?', [parsedShiftId]),
             dbAll('SELECT id, work_date FROM work_schedules WHERE user_id = ? AND work_date >= ? AND work_date <= ?', [
                 req.userId,
                 minDate,
@@ -159,7 +161,7 @@ exports.bulkCreateOrUpdateSchedule = async (req, res) => {
         let updatedCount = 0;
         let skippedCount = 0;
 
-        const ops = [];
+        const tasks = [];
         for (const workDate of uniqueDates) {
             const resolvedDayType = day_type_mode === 'AUTO' ? resolveAutoDayType(workDate) : day_type_mode;
             const existingId = existingByDate.get(workDate);
@@ -170,7 +172,7 @@ exports.bulkCreateOrUpdateSchedule = async (req, res) => {
                     continue;
                 }
                 updatedCount += 1;
-                ops.push(
+                tasks.push(() =>
                     dbRun('UPDATE work_schedules SET shift_id = ?, day_type = ?, notes = ? WHERE id = ?', [
                         shift.id,
                         resolvedDayType,
@@ -180,7 +182,7 @@ exports.bulkCreateOrUpdateSchedule = async (req, res) => {
                 );
             } else {
                 createdCount += 1;
-                ops.push(
+                tasks.push(() =>
                     dbRun(
                         'INSERT INTO work_schedules (user_id, work_date, shift_id, day_type, notes) VALUES (?, ?, ?, ?, ?)',
                         [req.userId, workDate, shift.id, resolvedDayType, cleanNotes]
@@ -189,8 +191,8 @@ exports.bulkCreateOrUpdateSchedule = async (req, res) => {
             }
         }
 
-        if (ops.length > 0) {
-            await Promise.all(ops);
+        for (let i = 0; i < tasks.length; i += 10) {
+            await Promise.all(tasks.slice(i, i + 10).map((run) => run()));
         }
 
         const savedCount = createdCount + updatedCount;
@@ -212,7 +214,10 @@ exports.bulkCreateOrUpdateSchedule = async (req, res) => {
 
 exports.deleteSchedule = async (req, res) => {
     try {
-        const { id } = req.params;
+        const id = parsePositiveInt(req.params.id);
+        if (!id) {
+            return res.status(400).json({ message: 'ID ca trực không hợp lệ' });
+        }
         const result = await dbRun('DELETE FROM work_schedules WHERE id = ? AND user_id = ?', [id, req.userId]);
         if (result.changes === 0) {
             return res.status(404).json({ message: 'Không tìm thấy ca trực cần xóa' });

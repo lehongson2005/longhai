@@ -13,8 +13,10 @@ const app = require('../app');
 
 afterAll(async () => {
     await new Promise((resolve) => db.close(() => resolve()));
-    if (fs.existsSync(testDbPath)) {
-        fs.unlinkSync(testDbPath);
+    for (const suffix of ['', '-wal', '-shm']) {
+        if (fs.existsSync(testDbPath + suffix)) {
+            fs.unlinkSync(testDbPath + suffix);
+        }
     }
 });
 
@@ -421,5 +423,126 @@ describe('5. Bulk schedule (AUTO Sunday), Salary Adjustments, Custom OT & Health
         // Cleanup adjustments
         await request(app).delete(`/api/adjustments/${allowRes.body.id}`).set('Authorization', `Bearer ${empToken}`);
         await request(app).delete(`/api/adjustments/${deductRes.body.id}`).set('Authorization', `Bearer ${empToken}`);
+    });
+});
+
+describe('6. Backup export/restore & positive integer ID validation', () => {
+    let adminToken;
+    let empToken;
+
+    beforeAll(async () => {
+        await ready();
+        const [adminRes, empRes] = await Promise.all([
+            request(app).post('/api/auth/login').send({
+                identifier: 'admin',
+                password: process.env.DEMO_ADMIN_PASSWORD || 'admin123'
+            }),
+            request(app).post('/api/auth/login').send({
+                identifier: 'nv1',
+                password: process.env.DEMO_EMPLOYEE_PASSWORD || '123456'
+            })
+        ]);
+        adminToken = adminRes.body.token;
+        empToken = empRes.body.token;
+    });
+
+    test('rejects non-numeric IDs with 400 instead of SQL/PostgreSQL type errors', async () => {
+        const badSchDel = await request(app).delete('/api/schedules/not-a-number').set('Authorization', `Bearer ${empToken}`);
+        expect(badSchDel.statusCode).toBe(400);
+
+        const badExpDel = await request(app).delete('/api/expenses/abc').set('Authorization', `Bearer ${empToken}`);
+        expect(badExpDel.statusCode).toBe(400);
+
+        const badAdjDel = await request(app).delete('/api/adjustments/0').set('Authorization', `Bearer ${empToken}`);
+        expect(badAdjDel.statusCode).toBe(400);
+
+        const badAdminReset = await request(app)
+            .post('/api/admin/users/abc/reset-password')
+            .set('Authorization', `Bearer ${adminToken}`);
+        expect(badAdminReset.statusCode).toBe(400);
+    });
+
+    test('blocks employee from /api/admin/backup and restores cross-user schedules/expenses idempotently', async () => {
+        const forbiddenBackup = await request(app)
+            .get('/api/admin/backup')
+            .set('Authorization', `Bearer ${empToken}`);
+        expect(forbiddenBackup.statusCode).toBe(403);
+
+        // Create a temporary guard with schedule & expense, export backup, delete them, then restore
+        const createRes = await request(app)
+            .post('/api/admin/users')
+            .set('Authorization', `Bearer ${adminToken}`)
+            .send({
+                name: 'Lý Sao Lưu',
+                identifier: 'backupguard',
+                employee_code: 'LH-BK1',
+                password: 'passbackup'
+            });
+        expect(createRes.statusCode).toBe(201);
+
+        const guardLogin = await request(app).post('/api/auth/login').send({
+            identifier: 'backupguard',
+            password: 'passbackup'
+        });
+        const guardToken = guardLogin.body.token;
+
+        const shiftsRes = await request(app).get('/api/shifts').set('Authorization', `Bearer ${guardToken}`);
+        const shiftB1 = shiftsRes.body.find((s) => s.code === 'B1');
+
+        await request(app)
+            .post('/api/schedules')
+            .set('Authorization', `Bearer ${guardToken}`)
+            .send({ work_date: '2026-11-18', shift_id: shiftB1.id, day_type: 'NORMAL', notes: 'Chốt cổng' });
+
+        await request(app)
+            .post('/api/expenses')
+            .set('Authorization', `Bearer ${guardToken}`)
+            .send({ expense_date: '2026-11-18', amount: 35000, note: 'Cà phê ca' });
+
+        const backupRes = await request(app)
+            .get('/api/admin/backup')
+            .set('Authorization', `Bearer ${adminToken}`);
+        expect(backupRes.statusCode).toBe(200);
+        expect(backupRes.body.version).toBe(1);
+        expect(backupRes.body.data.users.some((u) => u.username === 'backupguard')).toBe(true);
+
+        // Delete the guard (cascades schedule & expense)
+        const delGuardRes = await request(app)
+            .delete(`/api/admin/users/${createRes.body.user.id}`)
+            .set('Authorization', `Bearer ${adminToken}`);
+        expect(delGuardRes.statusCode).toBe(200);
+
+        // Restore backup once
+        const restoreRes = await request(app)
+            .post('/api/admin/restore')
+            .set('Authorization', `Bearer ${adminToken}`)
+            .send(backupRes.body);
+        expect(restoreRes.statusCode).toBe(200);
+        expect(restoreRes.body.stats.usersCreated).toBeGreaterThanOrEqual(1);
+        expect(restoreRes.body.stats.expensesAdded).toBeGreaterThanOrEqual(1);
+
+        // Restored guard logs in with their original password & sees restored schedule + expense
+        const reloginGuard = await request(app).post('/api/auth/login').send({
+            identifier: 'backupguard',
+            password: 'passbackup'
+        });
+        expect(reloginGuard.statusCode).toBe(200);
+
+        const dashGuard = await request(app)
+            .get('/api/dashboard')
+            .query({ date: '2026-11-18' })
+            .set('Authorization', `Bearer ${reloginGuard.body.token}`);
+        expect(dashGuard.statusCode).toBe(200);
+        expect(dashGuard.body.today.schedule.code).toBe('B1');
+        expect(dashGuard.body.today.expense).toBe(35000);
+
+        // Re-running restore a second time must be idempotent (no duplicate expenses)
+        const secondRestore = await request(app)
+            .post('/api/admin/restore')
+            .set('Authorization', `Bearer ${adminToken}`)
+            .send(backupRes.body);
+        expect(secondRestore.statusCode).toBe(200);
+        expect(secondRestore.body.stats.usersCreated).toBe(0);
+        expect(secondRestore.body.stats.expensesAdded).toBe(0);
     });
 });

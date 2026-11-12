@@ -16,6 +16,31 @@ function shouldUseSsl(url) {
     return { rejectUnauthorized: false };
 }
 
+function normalizePgConnectionString(url) {
+    const trimmed = String(url || '').trim();
+    if (!trimmed || !shouldUseSsl(trimmed)) {
+        return trimmed;
+    }
+    try {
+        const parsed = new URL(trimmed);
+        const mode = (parsed.searchParams.get('sslmode') || '').toLowerCase();
+        const libpqCompat = (parsed.searchParams.get('uselibpqcompat') || '').toLowerCase() === 'true';
+        if (!libpqCompat && mode !== 'verify-full') {
+            parsed.searchParams.set('sslmode', 'no-verify');
+        }
+        return parsed.toString();
+    } catch {
+        return trimmed;
+    }
+}
+
+function parsePositiveInt(value) {
+    if (value === undefined || value === null || value === '') return null;
+    const num = Number(value);
+    if (!Number.isSafeInteger(num) || num <= 0) return null;
+    return num;
+}
+
 function convertPlaceholders(sql) {
     let out = '';
     let paramIndex = 0;
@@ -59,12 +84,16 @@ let pool = null;
 
 if (isPostgres) {
     const { Pool } = require('pg');
+    const normalizedUrl = normalizePgConnectionString(databaseUrl);
     pool = new Pool({
-        connectionString: databaseUrl,
-        ssl: shouldUseSsl(databaseUrl),
+        connectionString: normalizedUrl,
+        ssl: shouldUseSsl(normalizedUrl),
         max: 10,
         idleTimeoutMillis: 30000,
-        connectionTimeoutMillis: 8000
+        connectionTimeoutMillis: 15000
+    });
+    pool.on('error', (err) => {
+        console.error('PostgreSQL pool idle client error:', err.message);
     });
     db = {
         isPostgres: true,
@@ -381,5 +410,7 @@ module.exports = {
     getStorageInfo,
     getMonthDateRange,
     convertPlaceholders,
-    shouldUseSsl
+    shouldUseSsl,
+    normalizePgConnectionString,
+    parsePositiveInt
 };

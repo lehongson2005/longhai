@@ -6,6 +6,8 @@ const { authMiddleware, requireAdmin } = require('../middleware/auth.middleware'
 router.use(authMiddleware, requireAdmin);
 
 router.get('/stats', adminController.getStats);
+router.get('/backup', adminController.exportBackup);
+router.post('/restore', adminController.importBackup);
 router.get('/users', adminController.listUsers);
 router.post('/users', adminController.createUser);
 router.post('/users/:id/reset-password', adminController.resetPassword);

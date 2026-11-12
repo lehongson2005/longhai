@@ -65,4 +65,15 @@ describe('Salary Calculator Tests', () => {
         const res = calculateHoliday(12, rate);
         expect(Math.round(res.salary)).toBe(714812); // 8 * 25529 * 2 + 4 * 25529 * 3
     });
+
+    test('Calculate ca 12h ngày thường sử dụng đúng overtime_rate tùy chỉnh từ Settings', () => {
+        const res = calculateShiftSalary(
+            { total_hours: 12 },
+            'NORMAL',
+            { standard_hour_rate: rate, overtime_rate: 45000 }
+        );
+        expect(res.regularHours).toBe(8);
+        expect(res.overtimeHours).toBe(4);
+        expect(Math.round(res.salary)).toBe(8 * rate + 4 * 45000);
+    });
 });

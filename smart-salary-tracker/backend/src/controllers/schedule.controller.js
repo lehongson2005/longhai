@@ -1,7 +1,14 @@
-const { dbRun, dbAll, dbGet } = require('../database/db');
+const { dbRun, dbAll, dbGet, getMonthDateRange } = require('../database/db');
 const { calculateShiftSalary } = require('../utils/salaryCalculator');
 
 const VALID_DAY_TYPES = ['NORMAL', 'WEEKLY_OFF', 'HOLIDAY'];
+const VALID_BULK_MODES = ['AUTO', ...VALID_DAY_TYPES];
+
+function resolveAutoDayType(dateStr) {
+    const [year, month, day] = String(dateStr).split('-').map(Number);
+    const utcDay = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+    return utcDay === 0 ? 'WEEKLY_OFF' : 'NORMAL';
+}
 
 exports.getSchedules = async (req, res) => {
     try {
@@ -16,8 +23,14 @@ exports.getSchedules = async (req, res) => {
         const params = [req.userId];
 
         if (month && year) {
-            query += ' AND strftime("%m", work_date) = ? AND strftime("%Y", work_date) = ?';
-            params.push(String(month).padStart(2, '0'), String(year));
+            let range;
+            try {
+                range = getMonthDateRange(month, year);
+            } catch {
+                return res.status(400).json({ message: 'Tháng hoặc năm không hợp lệ' });
+            }
+            query += ' AND ws.work_date >= ? AND ws.work_date < ?';
+            params.push(range.start, range.endExclusive);
         }
 
         query += ' ORDER BY ws.work_date ASC';
@@ -27,7 +40,7 @@ exports.getSchedules = async (req, res) => {
             dbGet('SELECT * FROM salary_settings WHERE user_id = ?', [req.userId])
         ]);
 
-        const settings = settingsRow || { standard_hour_rate: 25529 };
+        const settings = settingsRow || { standard_hour_rate: 25529, overtime_rate: 38293 };
         const enriched = schedules.map((sch) => {
             const calc = calculateShiftSalary(
                 { total_hours: sch.shift_hours },
@@ -97,6 +110,85 @@ exports.createOrUpdateSchedule = async (req, res) => {
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Lỗi máy chủ khi lưu ca trực' });
+    }
+};
+
+exports.bulkCreateOrUpdateSchedule = async (req, res) => {
+    try {
+        const { dates, shift_id, day_type_mode = 'AUTO', notes = '', overwrite = true } = req.body;
+
+        if (!Array.isArray(dates) || dates.length === 0) {
+            return res.status(400).json({ message: 'Vui lòng chọn ít nhất 1 ngày để chấm ca' });
+        }
+        if (dates.length > 62) {
+            return res.status(400).json({ message: 'Mỗi lần chỉ chấm tối đa 62 ngày' });
+        }
+        if (!shift_id) {
+            return res.status(400).json({ message: 'Vui lòng chọn ca trực' });
+        }
+        if (!VALID_BULK_MODES.includes(day_type_mode)) {
+            return res.status(400).json({ message: 'Chế độ loại ngày không hợp lệ' });
+        }
+
+        const uniqueDates = Array.from(
+            new Set(dates.map((d) => String(d).trim()).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)))
+        );
+        if (uniqueDates.length === 0) {
+            return res.status(400).json({ message: 'Danh sách ngày làm việc không hợp lệ' });
+        }
+
+        const shift = await dbGet('SELECT id, code, total_hours FROM shifts WHERE id = ?', [shift_id]);
+        if (!shift) {
+            return res.status(404).json({ message: 'Ca trực không tồn tại' });
+        }
+
+        const cleanNotes = String(notes || '').trim();
+        let createdCount = 0;
+        let updatedCount = 0;
+        let skippedCount = 0;
+
+        for (const workDate of uniqueDates) {
+            const resolvedDayType = day_type_mode === 'AUTO' ? resolveAutoDayType(workDate) : day_type_mode;
+            const existing = await dbGet('SELECT id FROM work_schedules WHERE user_id = ? AND work_date = ?', [
+                req.userId,
+                workDate
+            ]);
+
+            if (existing) {
+                if (!overwrite) {
+                    skippedCount += 1;
+                    continue;
+                }
+                await dbRun('UPDATE work_schedules SET shift_id = ?, day_type = ?, notes = ? WHERE id = ?', [
+                    shift.id,
+                    resolvedDayType,
+                    cleanNotes,
+                    existing.id
+                ]);
+                updatedCount += 1;
+            } else {
+                await dbRun(
+                    'INSERT INTO work_schedules (user_id, work_date, shift_id, day_type, notes) VALUES (?, ?, ?, ?, ?)',
+                    [req.userId, workDate, shift.id, resolvedDayType, cleanNotes]
+                );
+                createdCount += 1;
+            }
+        }
+
+        const savedCount = createdCount + updatedCount;
+        res.json({
+            createdCount,
+            updatedCount,
+            skippedCount,
+            savedCount,
+            message:
+                skippedCount > 0
+                    ? `Đã chấm ca ${shift.code} cho ${savedCount} ngày (bỏ qua ${skippedCount} ngày đã chấm)`
+                    : `Đã chấm ca ${shift.code} cho ${savedCount} ngày!`
+        });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Lỗi máy chủ khi chấm ca hàng loạt' });
     }
 };
 

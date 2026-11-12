@@ -1,5 +1,5 @@
 const bcrypt = require('bcrypt');
-const { dbAll, dbGet, dbRun, ensureUserDefaults } = require('../database/db');
+const { dbAll, dbGet, dbRun, ensureUserDefaults, getStorageInfo } = require('../database/db');
 
 const VALID_ROLES = ['employee', 'admin'];
 
@@ -13,10 +13,11 @@ exports.getStats = async (req, res) => {
         ]);
 
         res.json({
-            totalUsers: totalUsersRow?.count || 0,
-            totalEmployees: employeesRow?.count || 0,
-            totalAdmins: adminsRow?.count || 0,
-            activeShifts: shiftsRow?.count || 0
+            totalUsers: Number(totalUsersRow?.count || 0),
+            totalEmployees: Number(employeesRow?.count || 0),
+            totalAdmins: Number(adminsRow?.count || 0),
+            activeShifts: Number(shiftsRow?.count || 0),
+            storage: getStorageInfo()
         });
     } catch (error) {
         console.error(error);
@@ -44,14 +45,21 @@ exports.listUsers = async (req, res) => {
         const params = [];
 
         if (q && String(q).trim()) {
-            const kw = `%${String(q).trim()}%`;
-            query += ' WHERE u.name LIKE ? OR u.username LIKE ? OR u.email LIKE ? OR u.employee_code LIKE ?';
+            const kw = `%${String(q).trim().toLowerCase()}%`;
+            query +=
+                " WHERE LOWER(u.name) LIKE ? OR LOWER(COALESCE(u.username, '')) LIKE ? OR LOWER(COALESCE(u.email, '')) LIKE ? OR LOWER(COALESCE(u.employee_code, '')) LIKE ?";
             params.push(kw, kw, kw, kw);
         }
 
         query += " ORDER BY CASE WHEN u.role = 'admin' THEN 0 ELSE 1 END, u.id DESC";
         const users = await dbAll(query, params);
-        res.json(users);
+        res.json(
+            users.map((u) => ({
+                ...u,
+                schedule_count: Number(u.schedule_count || 0),
+                expense_count: Number(u.expense_count || 0)
+            }))
+        );
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Lỗi máy chủ khi tải danh sách nhân viên' });
@@ -224,6 +232,7 @@ exports.deleteUser = async (req, res) => {
 
         await dbRun('DELETE FROM work_schedules WHERE user_id = ?', [target.id]);
         await dbRun('DELETE FROM expenses WHERE user_id = ?', [target.id]);
+        await dbRun('DELETE FROM salary_adjustments WHERE user_id = ?', [target.id]);
         await dbRun('DELETE FROM salary_settings WHERE user_id = ?', [target.id]);
         await dbRun('DELETE FROM expense_categories WHERE user_id = ?', [target.id]);
         await dbRun('DELETE FROM salary_records WHERE user_id = ?', [target.id]);

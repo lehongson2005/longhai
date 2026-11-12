@@ -7,6 +7,7 @@ router.use(authMiddleware);
 
 router.get('/', scheduleController.getSchedules);
 router.post('/', scheduleController.createOrUpdateSchedule);
+router.post('/bulk', scheduleController.bulkCreateOrUpdateSchedule);
 router.delete('/:id', scheduleController.deleteSchedule);
 
 module.exports = router;

@@ -1,21 +1,43 @@
-import { useState, useEffect, useCallback } from 'react';
-import { getSchedules, saveSchedule, deleteSchedule } from '../services/scheduleService';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useOutletContext } from 'react-router-dom';
+import { getSchedules, saveSchedule, bulkSaveSchedule, deleteSchedule } from '../services/scheduleService';
 import { getShifts } from '../services/shiftService';
 import { getSettings } from '../services/settingsService';
-import { startOfMonth, endOfMonth, eachDayOfInterval, format, getDay } from 'date-fns';
-import { ChevronLeft, ChevronRight, Trash2, X, Clock, CalendarDays, Coins } from 'lucide-react';
+import { getDashboardData } from '../services/dashboardService';
+import { startOfMonth, endOfMonth, eachDayOfInterval, format, getDay, addDays } from 'date-fns';
+import {
+  ChevronLeft,
+  ChevronRight,
+  Trash2,
+  X,
+  Clock,
+  CalendarDays,
+  Coins,
+  CalendarRange,
+  Copy,
+} from 'lucide-react';
 import clsx from 'clsx';
 import { useToast } from '../components/useToast';
+import { buildPayslipSummary, copyTextToClipboard } from '../utils/payslipText';
 
 const DAY_TYPE_OPTIONS = [
-  { value: 'NORMAL', label: 'Ngày thường', hint: '8h chuẩn • OT 150%' },
+  { value: 'NORMAL', label: 'Ngày thường', hint: '8h chuẩn • OT theo đơn giá' },
   { value: 'WEEKLY_OFF', label: 'Chủ Nhật', hint: 'Nhân 200%' },
   { value: 'HOLIDAY', label: 'Ngày Lễ', hint: '8h 200% • Sau 8h 300%' },
 ];
 
 const WEEKDAY_NAMES = ['Chủ Nhật', 'Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy'];
+const WEEKDAY_PILLS = [
+  { day: 1, label: 'T2' },
+  { day: 2, label: 'T3' },
+  { day: 3, label: 'T4' },
+  { day: 4, label: 'T5' },
+  { day: 5, label: 'T6' },
+  { day: 6, label: 'T7' },
+  { day: 0, label: 'CN' },
+];
 
-function estimatePay(hours, dayType, hourRate) {
+function estimatePay(hours, dayType, hourRate, otRate) {
   if (!hours || hours <= 0) return 0;
   if (dayType === 'WEEKLY_OFF') return Math.round(hours * hourRate * 2);
   if (dayType === 'HOLIDAY') {
@@ -25,7 +47,8 @@ function estimatePay(hours, dayType, hourRate) {
   }
   const regular = Math.min(8, hours);
   const ot = Math.max(0, hours - 8);
-  return Math.round(regular * hourRate + ot * hourRate * 1.5);
+  const effectiveOt = Number(otRate) > 0 ? Number(otRate) : hourRate * 1.5;
+  return Math.round(regular * hourRate + ot * effectiveOt);
 }
 
 function getShiftBadgeStyle(totalHours, code) {
@@ -37,19 +60,42 @@ function getShiftBadgeStyle(totalHours, code) {
 }
 
 export default function Schedule() {
+  const outletContext = useOutletContext() || {};
+  const user = outletContext.user;
+
   const [currentDate, setCurrentDate] = useState(() => new Date());
   const [todayStr] = useState(() => format(new Date(), 'yyyy-MM-dd'));
   const [schedules, setSchedules] = useState([]);
   const [shifts, setShifts] = useState([]);
   const [hourRate, setHourRate] = useState(25529);
+  const [otRate, setOtRate] = useState(38293);
+
+  // Single day modal
   const [selectedDate, setSelectedDate] = useState(null);
   const [showModal, setShowModal] = useState(false);
-
   const [selectedShiftId, setSelectedShiftId] = useState('');
   const [dayType, setDayType] = useState('NORMAL');
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+
+  // Bulk schedule modal
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkStart, setBulkStart] = useState('');
+  const [bulkEnd, setBulkEnd] = useState('');
+  const [bulkWeekdays, setBulkWeekdays] = useState([1, 2, 3, 4, 5, 6]);
+  const [bulkShiftId, setBulkShiftId] = useState('');
+  const [bulkDayMode, setBulkDayMode] = useState('AUTO');
+  const [bulkOnlyEmpty, setBulkOnlyEmpty] = useState(true);
+  const [bulkNotes, setBulkNotes] = useState('');
+  const [bulkSaving, setBulkSaving] = useState(false);
+
+  // Copy payslip modal
+  const [payslipOpen, setPayslipOpen] = useState(false);
+  const [includeDetails, setIncludeDetails] = useState(true);
+  const [dashboardSnapshot, setDashboardSnapshot] = useState(null);
+  const [loadingPayslip, setLoadingPayslip] = useState(false);
+
   const toast = useToast();
 
   const fetchData = useCallback(async () => {
@@ -65,6 +111,9 @@ export default function Schedule() {
       setShifts(shiftRes);
       if (settingsRes?.standard_hour_rate) {
         setHourRate(Number(settingsRes.standard_hour_rate));
+      }
+      if (settingsRes?.overtime_rate) {
+        setOtRate(Number(settingsRes.overtime_rate));
       }
     } catch {
       toast.error('Không thể tải dữ liệu lịch trực.');
@@ -150,6 +199,123 @@ export default function Schedule() {
     }
   };
 
+  const openBulkModal = () => {
+    const mStart = startOfMonth(currentDate);
+    const mEnd = endOfMonth(currentDate);
+    setBulkStart(format(mStart, 'yyyy-MM-dd'));
+    setBulkEnd(format(mEnd, 'yyyy-MM-dd'));
+    setBulkWeekdays([1, 2, 3, 4, 5, 6]);
+    const defaultShift = shifts.find((s) => s.code === 'A') || shifts[0];
+    setBulkShiftId(defaultShift?.id || '');
+    setBulkDayMode('AUTO');
+    setBulkOnlyEmpty(true);
+    setBulkNotes('');
+    setBulkOpen(true);
+  };
+
+  const applyBulkPresetRange = (preset) => {
+    const mStart = startOfMonth(currentDate);
+    const mEnd = endOfMonth(currentDate);
+    if (preset === 'MONTH') {
+      setBulkStart(format(mStart, 'yyyy-MM-dd'));
+      setBulkEnd(format(mEnd, 'yyyy-MM-dd'));
+    } else if (preset === 'HALF_1') {
+      setBulkStart(format(mStart, 'yyyy-MM-dd'));
+      setBulkEnd(format(new Date(currentDate.getFullYear(), currentDate.getMonth(), 15), 'yyyy-MM-dd'));
+    } else if (preset === 'HALF_2') {
+      setBulkStart(format(new Date(currentDate.getFullYear(), currentDate.getMonth(), 16), 'yyyy-MM-dd'));
+      setBulkEnd(format(mEnd, 'yyyy-MM-dd'));
+    } else if (preset === 'WEEK_7') {
+      const base = new Date();
+      setBulkStart(format(base, 'yyyy-MM-dd'));
+      setBulkEnd(format(addDays(base, 6), 'yyyy-MM-dd'));
+    }
+  };
+
+  const toggleBulkWeekday = (dayNum) => {
+    setBulkWeekdays((prev) =>
+      prev.includes(dayNum) ? prev.filter((d) => d !== dayNum) : [...prev, dayNum]
+    );
+  };
+
+  const bulkTargetDates = useMemo(() => {
+    if (!bulkStart || !bulkEnd || bulkWeekdays.length === 0) return [];
+    const s = new Date(`${bulkStart}T00:00:00`);
+    const e = new Date(`${bulkEnd}T00:00:00`);
+    if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime()) || s > e) return [];
+    const diffDays = Math.round((e - s) / (1000 * 60 * 60 * 24)) + 1;
+    if (diffDays > 62) return [];
+    const existingSet = new Set(schedules.map((sch) => sch.work_date));
+    return eachDayOfInterval({ start: s, end: e })
+      .filter((d) => bulkWeekdays.includes(getDay(d)))
+      .map((d) => format(d, 'yyyy-MM-dd'))
+      .filter((dStr) => (bulkOnlyEmpty ? !existingSet.has(dStr) : true));
+  }, [bulkStart, bulkEnd, bulkWeekdays, bulkOnlyEmpty, schedules]);
+
+  const handleBulkSubmit = async (e) => {
+    e.preventDefault();
+    if (!bulkShiftId) {
+      toast.warning('Vui lòng chọn ca trực muốn áp dụng.');
+      return;
+    }
+    if (bulkTargetDates.length === 0) {
+      toast.warning('Không có ngày nào phù hợp để chấm trong khoảng đã chọn.');
+      return;
+    }
+
+    setBulkSaving(true);
+    try {
+      const res = await bulkSaveSchedule({
+        dates: bulkTargetDates,
+        shift_id: bulkShiftId,
+        day_type_mode: bulkDayMode,
+        overwrite: !bulkOnlyEmpty,
+        notes: bulkNotes,
+      });
+      toast.success(res.message || `Đã chấm ${bulkTargetDates.length} ngày!`, 'Chấm ca hàng loạt');
+      setBulkOpen(false);
+      await fetchData();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Lỗi khi chấm ca nhiều ngày.');
+    } finally {
+      setBulkSaving(false);
+    }
+  };
+
+  const handleOpenPayslip = async () => {
+    setPayslipOpen(true);
+    setLoadingPayslip(true);
+    try {
+      const snap = await getDashboardData(new Date(), currentDate);
+      setDashboardSnapshot(snap);
+    } catch {
+      toast.error('Không thể tổng hợp dữ liệu tháng.');
+    } finally {
+      setLoadingPayslip(false);
+    }
+  };
+
+  const payslipText = dashboardSnapshot
+    ? buildPayslipSummary({
+        user,
+        month: currentDate.getMonth() + 1,
+        year: currentDate.getFullYear(),
+        dashboardMonth: dashboardSnapshot.month,
+        schedules,
+        includeDailyDetails: includeDetails,
+      })
+    : '';
+
+  const handleCopyPayslip = async () => {
+    if (!payslipText) return;
+    const ok = await copyTextToClipboard(payslipText);
+    if (ok) {
+      toast.success('Đã sao chép bảng công! Dán vào Zalo để gửi ngay.', 'Đã sao chép');
+    } else {
+      toast.error('Không thể tự sao chép, vui lòng bôi đen nội dung để chép.');
+    }
+  };
+
   const firstDay = getDay(startOfMonth(currentDate));
   const emptyDays = Array.from({ length: firstDay === 0 ? 6 : firstDay - 1 });
 
@@ -167,7 +333,7 @@ export default function Schedule() {
   );
 
   const activeShiftObj = shifts.find((s) => Number(s.id) === Number(selectedShiftId));
-  const previewPay = estimatePay(activeShiftObj?.total_hours || 0, dayType, hourRate);
+  const previewPay = estimatePay(activeShiftObj?.total_hours || 0, dayType, hourRate, otRate);
 
   return (
     <div className="space-y-4 sm:space-y-5">
@@ -185,7 +351,7 @@ export default function Schedule() {
           <h1 className="font-extrabold text-base sm:text-lg text-[#0A192F]">
             LỊCH TRỰC THÁNG {format(currentDate, 'MM/yyyy')}
           </h1>
-          <p className="text-[11px] text-slate-500">Chạm vào từng ngày để chấm ca (có ca 4 tiếng B1, B2)</p>
+          <p className="text-[11px] text-slate-500">Chạm từng ngày để chấm hoặc dùng Chấm nhiều ngày</p>
         </div>
         <button
           type="button"
@@ -216,12 +382,33 @@ export default function Schedule() {
         <div className="bg-white rounded-2xl border border-slate-200 p-3.5 text-center shadow-xs">
           <div className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-500">
             <Coins className="w-3.5 h-3.5 text-emerald-600" />
-            <span>Ước tính lương</span>
+            <span>Tiền ca</span>
           </div>
           <div className="text-sm sm:text-lg font-extrabold text-emerald-700 mt-0.5 truncate">
             {formatVND(monthStats.salary)}
           </div>
         </div>
+      </div>
+
+      {/* Quick Tools: Bulk Schedule & Copy Payslip */}
+      <div className="grid grid-cols-2 gap-2.5 sm:gap-3">
+        <button
+          type="button"
+          onClick={openBulkModal}
+          className="inline-flex items-center justify-center gap-2 bg-[#0A192F] hover:bg-[#13294B] text-white px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm shadow-xs cursor-pointer"
+        >
+          <CalendarRange className="w-4 h-4" />
+          <span>Chấm nhiều ngày</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={handleOpenPayslip}
+          className="inline-flex items-center justify-center gap-2 bg-white hover:bg-slate-50 border border-slate-300 text-[#0A192F] px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm shadow-xs cursor-pointer"
+        >
+          <Copy className="w-4 h-4 text-[#E30613]" />
+          <span>Sao chép bảng công</span>
+        </button>
       </div>
 
       {/* Shift Legend */}
@@ -314,7 +501,7 @@ export default function Schedule() {
         </div>
       </div>
 
-      {/* Shift Picker Modal (z-[60] so mobile nav z-30 never covers it) */}
+      {/* Single Day Shift Picker Modal */}
       {showModal && selectedDate && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-end sm:items-center justify-center sm:p-4 z-[60]">
           <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full max-w-md max-h-[90dvh] flex flex-col overflow-hidden">
@@ -336,7 +523,6 @@ export default function Schedule() {
             </div>
 
             <form onSubmit={handleSave} className="flex-1 overflow-y-auto p-5 space-y-5">
-              {/* 1. Shift Grid */}
               <div>
                 <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">
                   1. Chọn ca trực
@@ -369,7 +555,6 @@ export default function Schedule() {
                 </div>
               </div>
 
-              {/* 2. Day Type */}
               <div>
                 <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">
                   2. Loại ngày tính công
@@ -399,7 +584,6 @@ export default function Schedule() {
                 </div>
               </div>
 
-              {/* 3. Notes */}
               <div>
                 <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">
                   3. Ghi chú (tùy chọn)
@@ -413,7 +597,6 @@ export default function Schedule() {
                 />
               </div>
 
-              {/* Live Pay Preview */}
               <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 flex items-center justify-between">
                 <span className="text-xs font-semibold text-emerald-900">
                   Tiền công ước tính ({activeShiftObj?.code || '-'} • {activeShiftObj?.total_hours || 0}h):
@@ -421,7 +604,6 @@ export default function Schedule() {
                 <span className="text-base font-extrabold text-emerald-700">{formatVND(previewPay)}</span>
               </div>
 
-              {/* Sticky Footer Actions */}
               <div className="pt-2 flex items-center gap-2.5 border-t border-slate-100">
                 {existingSchedule && (
                   <button
@@ -450,6 +632,274 @@ export default function Schedule() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Shift Scheduling Modal */}
+      {bulkOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-end sm:items-center justify-center sm:p-4 z-[60]">
+          <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full max-w-md max-h-[90dvh] flex flex-col overflow-hidden">
+            <div className="bg-[#0A192F] text-white px-5 py-4 flex items-center justify-between shrink-0">
+              <div>
+                <h3 className="font-extrabold text-base">Chấm ca nhanh nhiều ngày</h3>
+                <p className="text-xs text-slate-300">Tiết kiệm thời gian chấm cả tuần hoặc cả tháng</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setBulkOpen(false)}
+                className="p-1.5 rounded-lg hover:bg-white/10 cursor-pointer"
+                aria-label="Đóng"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleBulkSubmit} className="flex-1 overflow-y-auto p-5 space-y-4 text-sm">
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">
+                  1. Chọn nhanh khoảng ngày
+                </label>
+                <div className="grid grid-cols-4 gap-1.5 mb-2.5 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => applyBulkPresetRange('MONTH')}
+                    className="py-1.5 px-2 rounded-lg bg-slate-100 hover:bg-slate-200 font-semibold text-slate-700 cursor-pointer"
+                  >
+                    Cả tháng
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => applyBulkPresetRange('HALF_1')}
+                    className="py-1.5 px-2 rounded-lg bg-slate-100 hover:bg-slate-200 font-semibold text-slate-700 cursor-pointer"
+                  >
+                    1 → 15
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => applyBulkPresetRange('HALF_2')}
+                    className="py-1.5 px-2 rounded-lg bg-slate-100 hover:bg-slate-200 font-semibold text-slate-700 cursor-pointer"
+                  >
+                    16 → hết
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => applyBulkPresetRange('WEEK_7')}
+                    className="py-1.5 px-2 rounded-lg bg-slate-100 hover:bg-slate-200 font-semibold text-slate-700 cursor-pointer"
+                  >
+                    7 ngày tới
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 mb-1">Từ ngày</label>
+                    <input
+                      type="date"
+                      required
+                      value={bulkStart}
+                      onChange={(e) => setBulkStart(e.target.value)}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs sm:text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 mb-1">Đến ngày</label>
+                    <input
+                      type="date"
+                      required
+                      value={bulkEnd}
+                      onChange={(e) => setBulkEnd(e.target.value)}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs sm:text-sm"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                    2. Các thứ áp dụng
+                  </label>
+                  <div className="flex gap-2 text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => setBulkWeekdays([1, 2, 3, 4, 5, 6])}
+                      className="font-bold text-[#0A192F] hover:underline cursor-pointer"
+                    >
+                      T2–T7
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBulkWeekdays([0, 1, 2, 3, 4, 5, 6])}
+                      className="font-bold text-[#E30613] hover:underline cursor-pointer"
+                    >
+                      Cả tuần
+                    </button>
+                  </div>
+                </div>
+                <div className="grid grid-cols-7 gap-1.5">
+                  {WEEKDAY_PILLS.map((wp) => {
+                    const active = bulkWeekdays.includes(wp.day);
+                    return (
+                      <button
+                        type="button"
+                        key={wp.day}
+                        onClick={() => toggleBulkWeekday(wp.day)}
+                        className={clsx(
+                          'py-2 rounded-lg text-xs font-bold border cursor-pointer',
+                          active
+                            ? 'bg-[#0A192F] border-[#0A192F] text-white'
+                            : 'bg-white border-slate-200 text-slate-500'
+                        )}
+                      >
+                        {wp.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">
+                  3. Chọn ca trực áp dụng
+                </label>
+                <div className="grid grid-cols-4 gap-1.5">
+                  {shifts.map((s) => {
+                    const active = Number(bulkShiftId) === Number(s.id);
+                    return (
+                      <button
+                        type="button"
+                        key={s.id}
+                        onClick={() => setBulkShiftId(s.id)}
+                        className={clsx(
+                          'p-2 rounded-xl border text-center cursor-pointer',
+                          active
+                            ? 'border-[#E30613] bg-red-50 ring-2 ring-[#E30613]/40'
+                            : 'border-slate-200 bg-white hover:bg-slate-50'
+                        )}
+                      >
+                        <div className="font-extrabold text-xs text-[#0A192F]">{s.code}</div>
+                        <div className="text-[10px] text-slate-500">{s.total_hours > 0 ? `${s.total_hours}h` : 'Nghỉ'}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+                  4. Loại ngày tính công
+                </label>
+                <select
+                  value={bulkDayMode}
+                  onChange={(e) => setBulkDayMode(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl bg-white text-xs sm:text-sm font-medium"
+                >
+                  <option value="AUTO">Tự động (T2–T7 ngày thường, Chủ Nhật x200%)</option>
+                  <option value="NORMAL">Tất cả tính Ngày thường</option>
+                  <option value="WEEKLY_OFF">Tất cả tính Chủ Nhật (200%)</option>
+                  <option value="HOLIDAY">Tất cả tính Ngày Lễ (200%–300%)</option>
+                </select>
+              </div>
+
+              <div>
+                <input
+                  type="text"
+                  value={bulkNotes}
+                  onChange={(e) => setBulkNotes(e.target.value)}
+                  placeholder="Ghi chú chung (tùy chọn, VD: Mục tiêu KCN)"
+                  className="w-full px-3.5 py-2 border border-slate-300 rounded-xl text-xs sm:text-sm"
+                />
+              </div>
+
+              <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={bulkOnlyEmpty}
+                  onChange={(e) => setBulkOnlyEmpty(e.target.checked)}
+                  className="w-4 h-4 rounded accent-[#0A192F] cursor-pointer"
+                />
+                <span>Chỉ điền vào ngày còn trống (giữ nguyên các ngày đã chấm)</span>
+              </label>
+
+              <div className="bg-blue-50 border border-blue-200 rounded-xl px-3.5 py-2.5 text-xs font-semibold text-blue-950">
+                Sẽ áp dụng cho <strong>{bulkTargetDates.length}</strong> ngày trong khoảng đã chọn.
+              </div>
+
+              <div className="pt-1 flex gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setBulkOpen(false)}
+                  className="px-4 py-2.5 rounded-xl bg-slate-100 text-slate-700 font-semibold cursor-pointer"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="submit"
+                  disabled={bulkSaving || bulkTargetDates.length === 0}
+                  className="flex-1 bg-[#E30613] hover:bg-[#B8040E] text-white font-bold py-2.5 rounded-xl cursor-pointer disabled:opacity-60"
+                >
+                  {bulkSaving ? 'Đang chấm ca...' : `Chấm ${bulkTargetDates.length} ngày`}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Copy Payslip Modal */}
+      {payslipOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-end sm:items-center justify-center sm:p-4 z-[60]">
+          <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full max-w-lg max-h-[90dvh] flex flex-col overflow-hidden">
+            <div className="bg-[#0A192F] text-white px-5 py-4 flex items-center justify-between">
+              <h3 className="font-extrabold text-base">Sao chép bảng công tháng {format(currentDate, 'MM/yyyy')}</h3>
+              <button
+                type="button"
+                onClick={() => setPayslipOpen(false)}
+                className="p-1 rounded-lg hover:bg-white/10 cursor-pointer"
+                aria-label="Đóng"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 overflow-y-auto">
+              <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={includeDetails}
+                  onChange={(e) => setIncludeDetails(e.target.checked)}
+                  className="w-4 h-4 rounded accent-[#0A192F] cursor-pointer"
+                />
+                <span>Kèm danh sách từng ngày đã chấm ({schedules.length} ngày)</span>
+              </label>
+
+              {loadingPayslip ? (
+                <div className="p-6 text-center text-sm text-slate-500">Đang tổng hợp bảng công...</div>
+              ) : (
+                <pre className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs font-mono text-slate-800 whitespace-pre-wrap leading-relaxed max-h-72 overflow-y-auto">
+                  {payslipText}
+                </pre>
+              )}
+
+              <div className="flex gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setPayslipOpen(false)}
+                  className="px-4 py-2.5 rounded-xl bg-slate-100 text-slate-700 text-sm font-semibold cursor-pointer"
+                >
+                  Đóng
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCopyPayslip}
+                  className="flex-1 inline-flex items-center justify-center gap-2 bg-[#E30613] hover:bg-[#B8040E] text-white font-bold py-2.5 px-4 rounded-xl text-sm cursor-pointer"
+                >
+                  <Copy className="w-4 h-4" />
+                  <span>Sao chép để gửi Zalo</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

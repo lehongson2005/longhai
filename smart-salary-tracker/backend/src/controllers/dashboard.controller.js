@@ -1,4 +1,4 @@
-const { dbAll, dbGet } = require('../database/db');
+const { dbAll, dbGet, getMonthDateRange } = require('../database/db');
 const { calculateShiftSalary } = require('../utils/salaryCalculator');
 
 exports.getDashboardData = async (req, res) => {
@@ -9,8 +9,15 @@ exports.getDashboardData = async (req, res) => {
         }
 
         const [dateYear, dateMonth] = date.split('-');
-        const targetYear = queryYear ? String(queryYear) : dateYear;
-        const targetMonth = queryMonth ? String(queryMonth).padStart(2, '0') : dateMonth.padStart(2, '0');
+        const targetYear = Number(queryYear || dateYear);
+        const targetMonth = Number(queryMonth || dateMonth);
+
+        let range;
+        try {
+            range = getMonthDateRange(targetMonth, targetYear);
+        } catch {
+            return res.status(400).json({ message: 'Tháng hoặc năm không hợp lệ' });
+        }
 
         const settingsRow = await dbGet('SELECT * FROM salary_settings WHERE user_id = ?', [req.userId]);
         const settings = settingsRow || {
@@ -41,19 +48,20 @@ exports.getDashboardData = async (req, res) => {
             'SELECT SUM(amount) as total FROM expenses WHERE user_id = ? AND expense_date = ?',
             [req.userId, date]
         );
-        const todayExpense = todayExpRow?.total || 0;
+        const todayExpense = Number(todayExpRow?.total || 0);
         const todayBalance = todayIncome - todayExpense;
 
-        // Month stats
+        // Month schedules & salary calculation
         const monthSchedules = await dbAll(
             `SELECT ws.*, s.total_hours, s.code, s.name as shift_name
              FROM work_schedules ws
              JOIN shifts s ON ws.shift_id = s.id
-             WHERE ws.user_id = ? AND strftime("%m", ws.work_date) = ? AND strftime("%Y", ws.work_date) = ?`,
-            [req.userId, targetMonth, targetYear]
+             WHERE ws.user_id = ? AND ws.work_date >= ? AND ws.work_date < ?
+             ORDER BY ws.work_date ASC`,
+            [req.userId, range.start, range.endExclusive]
         );
 
-        let monthIncome = 0;
+        let rawShiftIncome = 0;
         let totalHours = 0;
         let regularHours = 0;
         let overtimeHours = 0;
@@ -62,7 +70,7 @@ exports.getDashboardData = async (req, res) => {
 
         monthSchedules.forEach((sch) => {
             const calc = calculateShiftSalary(sch, sch.day_type, settings);
-            monthIncome += calc.salary;
+            rawShiftIncome += calc.salary;
             totalHours += Number(sch.total_hours) || 0;
             regularHours += calc.regularHours || 0;
             overtimeHours += calc.overtimeHours || 0;
@@ -76,32 +84,58 @@ exports.getDashboardData = async (req, res) => {
             shiftCountMap[sch.code].hours += Number(sch.total_hours) || 0;
         });
 
-        monthIncome = Math.round(monthIncome);
+        const shiftIncome = Math.round(rawShiftIncome);
 
+        // Month allowances & deductions
+        const adjustments = await dbAll(
+            `SELECT * FROM salary_adjustments
+             WHERE user_id = ? AND adjustment_date >= ? AND adjustment_date < ?
+             ORDER BY adjustment_date DESC, id DESC`,
+            [req.userId, range.start, range.endExclusive]
+        );
+
+        let totalAllowances = 0;
+        let totalDeductions = 0;
+        adjustments.forEach((adj) => {
+            const amt = Number(adj.amount) || 0;
+            if (adj.type === 'ALLOWANCE') totalAllowances += amt;
+            else if (adj.type === 'DEDUCTION') totalDeductions += amt;
+        });
+
+        const allowances = Math.round(totalAllowances);
+        const deductions = Math.round(totalDeductions);
+        const netSalary = shiftIncome + allowances - deductions;
+
+        // Month expenses
         const monthExpRow = await dbGet(
             `SELECT SUM(amount) as total
              FROM expenses
-             WHERE user_id = ? AND strftime("%m", expense_date) = ? AND strftime("%Y", expense_date) = ?`,
-            [req.userId, targetMonth, targetYear]
+             WHERE user_id = ? AND expense_date >= ? AND expense_date < ?`,
+            [req.userId, range.start, range.endExclusive]
         );
-        const monthExpense = monthExpRow?.total || 0;
-        const monthBalance = monthIncome - monthExpense;
-        const monthlySavingsRate = monthIncome > 0 ? Number(((monthBalance / monthIncome) * 100).toFixed(1)) : 0;
+        const monthExpense = Number(monthExpRow?.total || 0);
+        const monthBalance = netSalary - monthExpense;
+        const monthlySavingsRate = netSalary > 0 ? Number(((monthBalance / netSalary) * 100).toFixed(1)) : 0;
 
-        const expenseBreakdown = await dbAll(
+        const expenseBreakdownRows = await dbAll(
             `SELECT COALESCE(c.name, 'Khác') as category_name, SUM(e.amount) as total
              FROM expenses e
              LEFT JOIN expense_categories c ON e.category_id = c.id
-             WHERE e.user_id = ? AND strftime("%m", e.expense_date) = ? AND strftime("%Y", e.expense_date) = ?
+             WHERE e.user_id = ? AND e.expense_date >= ? AND e.expense_date < ?
              GROUP BY COALESCE(c.name, 'Khác')
              ORDER BY total DESC`,
-            [req.userId, targetMonth, targetYear]
+            [req.userId, range.start, range.endExclusive]
         );
+
+        const expenseBreakdown = expenseBreakdownRows.map((row) => ({
+            category_name: row.category_name,
+            total: Number(row.total || 0)
+        }));
 
         res.json({
             period: {
-                month: Number(targetMonth),
-                year: Number(targetYear)
+                month: targetMonth,
+                year: targetYear
             },
             today: {
                 income: todayIncome,
@@ -110,7 +144,11 @@ exports.getDashboardData = async (req, res) => {
                 schedule: todaySchedule || null
             },
             month: {
-                income: monthIncome,
+                shiftIncome,
+                allowances,
+                deductions,
+                netSalary,
+                income: netSalary,
                 expense: monthExpense,
                 balance: monthBalance,
                 savingsRate: monthlySavingsRate,
@@ -119,7 +157,8 @@ exports.getDashboardData = async (req, res) => {
                 regularHours,
                 overtimeHours,
                 shiftBreakdown: Object.values(shiftCountMap),
-                expenseBreakdown
+                expenseBreakdown,
+                adjustments
             }
         });
     } catch (error) {

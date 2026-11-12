@@ -10,6 +10,7 @@ import {
   Search,
   Calculator,
   X,
+  Database,
 } from 'lucide-react';
 import BrandLogo from '../../components/BrandLogo';
 import { logout } from '../../services/authService';
@@ -190,6 +191,38 @@ export default function AdminDashboard({ user, setUser }) {
             <code className="px-1.5 py-0.5 rounded bg-amber-100 font-bold">123456</code>.
           </div>
         </div>
+
+        {/* Database Persistence Status Banner */}
+        {stats?.storage && (
+          <div
+            className={`rounded-2xl p-4 border flex items-start gap-3 text-xs sm:text-sm ${
+              stats.storage.persistent
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-950'
+                : 'bg-sky-50 border-sky-200 text-sky-950'
+            }`}
+          >
+            <Database
+              className={`w-5 h-5 shrink-0 mt-0.5 ${
+                stats.storage.persistent ? 'text-emerald-600' : 'text-sky-600'
+              }`}
+            />
+            <div>
+              {stats.storage.persistent ? (
+                <>
+                  <strong>Lưu trữ bền vững ({stats.storage.driver.toUpperCase()}):</strong> Tài khoản, ca trực và chi tiêu
+                  được lưu vĩnh viễn, không bị mất khi cập nhật hoặc khởi động lại.
+                </>
+              ) : (
+                <>
+                  <strong>Chế độ lưu trữ SQLite (dùng để test):</strong> Nếu chạy trên Render gói Free, dữ liệu mới tạo sẽ
+                  tự reset về mặc định khi deploy lại hoặc server ngủ. Để lưu vĩnh viễn, hãy gắn biến môi trường{' '}
+                  <code className="px-1.5 py-0.5 rounded bg-sky-100 font-bold">DATABASE_URL</code> (PostgreSQL miễn phí
+                  Neon / Supabase) trong Render → Environment.
+                </>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Search & Create Toolbar */}
         <div className="flex flex-col sm:flex-row gap-3 justify-between items-stretch sm:items-center">

@@ -10,13 +10,13 @@
    - Thông báo rõ khi quên mật khẩu: nhắn Admin đặt lại về `123456`, sau đó nhân viên tự đổi lại mật khẩu mới trong **Cài đặt**.
 
 2. **Cổng Nhân viên (`/nhan-vien`)**
-   - `/nhan-vien` — Tổng quan hôm nay & tháng (tổng công, tổng giờ chuẩn + OT, thu nhập ước tính, tổng chi tiêu theo danh mục).
-   - `/nhan-vien/schedule` — Lịch trực tháng với đầy đủ ca **4h (`B1`, `B2`)**, **8h (`A`, `B`, `C`)**, **12h (`A1`, `C1`, `H`, `R`)**, **16h (`AB`)** và `Nghỉ`, xem trước tiền công ca trước khi lưu, hỗ trợ xóa ca.
+   - `/nhan-vien` — Tổng quan hôm nay & tháng (lương ca trực + **Phụ cấp/Thưởng** - **Tạm ứng/Khấu trừ** = Thực nhận dự kiến - Chi tiêu), nút **Bảng công Zalo** sao chép báo cáo nhanh.
+   - `/nhan-vien/schedule` — Lịch trực tháng với đầy đủ ca **4h (`B1`, `B2`)**, **8h (`A`, `B`, `C`)**, **12h (`A1`, `C1`, `H`, `R`)**, **16h (`AB`)** và `Nghỉ`, hỗ trợ **Chấm nhiều ngày** hàng loạt (tự nhận Chủ Nhật x200%, tùy chọn chỉ điền ngày trống) và **Sao chép bảng công**.
    - `/nhan-vien/expenses` — Form ghi chi tiêu trực tiếp luôn hiển thị nút **Lưu chi tiêu** (kèm mức chọn nhanh `20k..200k`, chỉnh sửa & xóa có xác nhận).
-   - `/nhan-vien/settings` — Cấu hình lương cơ bản, số công chuẩn, đơn giá giờ (kèm nút tự tính đơn giá) và mục đổi mật khẩu cá nhân.
+   - `/nhan-vien/settings` — Cấu hình lương cơ bản, số công chuẩn, đơn giá giờ & đơn giá OT tùy chỉnh, và mục đổi mật khẩu cá nhân.
 
 3. **Cổng Quản trị Admin (`/admin`)**
-   - Tìm kiếm nhân viên, xem số lượng ca/chi tiêu, tạo nhanh tài khoản nhân viên, xóa tài khoản và **1 bấm Đặt lại mật khẩu về `123456`**.
+   - Tìm kiếm nhân viên, xem trạng thái lưu trữ (`SQLite` hay `PostgreSQL` bền vững), tạo nhanh tài khoản nhân viên, xóa tài khoản và **1 bấm Đặt lại mật khẩu về `123456`**.
 
 ## Tài khoản mặc định
 
@@ -29,7 +29,7 @@
 
 ## Công nghệ sử dụng
 
-- **Backend:** Node.js, Express 5, SQLite3 (`database.sqlite`), JWT (`jsonwebtoken`), `bcrypt`, Jest + Supertest.
+- **Backend:** Node.js, Express 5, Dual Database (**SQLite3** cho local/test & **PostgreSQL `pg`** qua `DATABASE_URL` cho lưu trữ bền vững), JWT (`jsonwebtoken`), `bcrypt`, Jest + Supertest.
 - **Frontend:** React 19, Vite 8, Tailwind CSS v4 (`@tailwindcss/postcss`), React Router DOM 7, Axios, Lucide React.
 
 ## Hướng dẫn chạy Local & Kiểm thử

@@ -16,7 +16,7 @@
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/lehongson2005/longhai)
 
-> File [`render.yaml`](./render.yaml) và [`Dockerfile`](./Dockerfile) đã được thiết lập sẵn (`node:22-trixie-slim`, tự build Frontend + Backend, healthcheck `/api/health`). Lưu ý: trên gói Render Free, dữ liệu file SQLite có thể reset khi container khởi động lại hoặc deploy mới.
+> File [`render.yaml`](./render.yaml) và [`Dockerfile`](./Dockerfile) đã được thiết lập sẵn (`node:22-trixie-slim`, tự build Frontend + Backend, healthcheck `/api/health`). Để dữ liệu **không bị mất khi Render Free ngủ hoặc deploy lại**, chỉ cần tạo 1 database PostgreSQL miễn phí (trên [Neon](https://neon.tech) hoặc [Supabase](https://supabase.com)) rồi dán `DATABASE_URL` vào **Render → Environment** (hệ thống tự động chuyển từ SQLite sang PostgreSQL).
 
 ## Tài liệu chi tiết & Chạy Local
 

@@ -10,6 +10,11 @@ export const saveSchedule = async (data) => {
     return response.data;
 };
 
+export const bulkSaveSchedule = async (data) => {
+    const response = await api.post('/schedules/bulk', data);
+    return response.data;
+};
+
 export const deleteSchedule = async (id) => {
     const response = await api.delete(`/schedules/${id}`);
     return response.data;

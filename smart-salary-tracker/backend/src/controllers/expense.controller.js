@@ -1,4 +1,4 @@
-const { dbRun, dbAll, dbGet } = require('../database/db');
+const { dbRun, dbAll, dbGet, getMonthDateRange } = require('../database/db');
 
 async function resolveCategoryId(rawCategoryId, userId) {
     if (rawCategoryId === undefined || rawCategoryId === null || String(rawCategoryId).trim() === '') {
@@ -30,8 +30,14 @@ exports.getExpenses = async (req, res) => {
             query += ' AND e.expense_date = ?';
             params.push(date);
         } else if (month && year) {
-            query += ' AND strftime("%m", e.expense_date) = ? AND strftime("%Y", e.expense_date) = ?';
-            params.push(String(month).padStart(2, '0'), String(year));
+            let range;
+            try {
+                range = getMonthDateRange(month, year);
+            } catch {
+                return res.status(400).json({ message: 'Tháng hoặc năm không hợp lệ' });
+            }
+            query += ' AND e.expense_date >= ? AND e.expense_date < ?';
+            params.push(range.start, range.endExclusive);
         }
 
         query += ' ORDER BY e.expense_date DESC, e.id DESC';

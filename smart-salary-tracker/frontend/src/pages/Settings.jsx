@@ -1,10 +1,13 @@
 import { useState, useEffect } from 'react';
+import { useOutletContext } from 'react-router-dom';
 import { getSettings, updateSettings } from '../services/settingsService';
 import { changePassword } from '../services/authService';
 import { Calculator, Save, Lock, Eye, EyeOff } from 'lucide-react';
 import { useToast } from '../components/useToast';
 
 export default function Settings() {
+  const outletContext = useOutletContext() || {};
+  const user = outletContext.user;
   const [settings, setSettings] = useState({
     base_salary: '',
     standard_work_days: '',
@@ -178,7 +181,7 @@ export default function Settings() {
             <p className="text-[11px] text-slate-500 mt-1">Áp dụng trực tiếp khi tính công ca B1/B2 (4h), A/B/C (8h)...</p>
           </div>
           <div>
-            <label className="block text-sm font-semibold text-slate-700 mb-1">Đơn giá OT 150% (VNĐ/giờ)</label>
+            <label className="block text-sm font-semibold text-slate-700 mb-1">Đơn giá OT / tăng ca (VNĐ/giờ)</label>
             <input
               type="number"
               name="overtime_rate"
@@ -188,6 +191,9 @@ export default function Settings() {
               value={settings.overtime_rate}
               onChange={handleChange}
             />
+            <p className="text-[11px] text-slate-500 mt-1">
+              Áp dụng trực tiếp cho các giờ vượt 8h trong ngày thường (ca A1, C1, AB, H, R).
+            </p>
           </div>
         </div>
 
@@ -203,6 +209,16 @@ export default function Settings() {
 
       {/* Change Password Card */}
       <form onSubmit={handleChangePassword} className="bg-white rounded-2xl shadow-xs border border-slate-200 p-5 sm:p-6 space-y-4">
+        <input
+          type="text"
+          name="username"
+          autoComplete="username"
+          value={user?.username || user?.employee_code || user?.email || ''}
+          readOnly
+          className="sr-only"
+          tabIndex={-1}
+          aria-hidden="true"
+        />
         <div className="flex items-center justify-between">
           <div>
             <h2 className="font-extrabold text-base text-[#0A192F]">2. Đổi mật khẩu đăng nhập</h2>
@@ -224,8 +240,10 @@ export default function Settings() {
           <div>
             <label className="block text-xs font-bold text-slate-600 mb-1">Mật khẩu hiện tại</label>
             <input
+              name="current-password"
               type={showPass ? 'text' : 'password'}
               required
+              autoComplete="current-password"
               className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#0A192F]"
               value={currentPassword}
               onChange={(e) => setCurrentPassword(e.target.value)}
@@ -235,9 +253,11 @@ export default function Settings() {
           <div>
             <label className="block text-xs font-bold text-slate-600 mb-1">Mật khẩu mới</label>
             <input
+              name="new-password"
               type={showPass ? 'text' : 'password'}
               required
               minLength={4}
+              autoComplete="new-password"
               className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#0A192F]"
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
@@ -247,9 +267,11 @@ export default function Settings() {
           <div>
             <label className="block text-xs font-bold text-slate-600 mb-1">Nhập lại mật khẩu mới</label>
             <input
+              name="confirm-password"
               type={showPass ? 'text' : 'password'}
               required
               minLength={4}
+              autoComplete="new-password"
               className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#0A192F]"
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}

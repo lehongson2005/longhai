@@ -5,11 +5,14 @@ import { register } from '../services/authService';
 import BrandLogo from '../components/BrandLogo';
 import { useToast } from '../components/useToast';
 
+const REMEMBER_KEY = 'remembered_identifier';
+
 export default function Register({ setUser }) {
   const [name, setName] = useState('');
   const [identifier, setIdentifier] = useState('');
   const [employeeCode, setEmployeeCode] = useState('');
   const [password, setPassword] = useState('');
+  const [rememberId, setRememberId] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -27,6 +30,9 @@ export default function Register({ setUser }) {
         password,
         employee_code: employeeCode,
       });
+      if (rememberId && identifier.trim()) {
+        localStorage.setItem(REMEMBER_KEY, identifier.trim());
+      }
       setUser(res.user);
       toast.success(`Chào mừng ${res.user.name}! Bạn có thể bắt đầu chấm ca và tính lương.`, 'Tạo tài khoản thành công');
       navigate('/nhan-vien');
@@ -71,12 +77,17 @@ export default function Register({ setUser }) {
 
         <form onSubmit={handleRegister} className="space-y-4">
           <div>
-            <label className="block text-sm font-semibold text-slate-700 mb-1.5">Họ và tên *</label>
+            <label htmlFor="reg-name" className="block text-sm font-semibold text-slate-700 mb-1.5">
+              Họ và tên *
+            </label>
             <div className="relative">
               <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
+                id="reg-name"
+                name="name"
                 type="text"
                 required
+                autoComplete="name"
                 className="w-full pl-10 pr-4 py-2.5 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#0A192F] text-sm"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
@@ -86,14 +97,17 @@ export default function Register({ setUser }) {
           </div>
 
           <div>
-            <label className="block text-sm font-semibold text-slate-700 mb-1.5">
+            <label htmlFor="reg-username" className="block text-sm font-semibold text-slate-700 mb-1.5">
               Tên đăng nhập hoặc SĐT *
             </label>
             <div className="relative">
               <Phone className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
+                id="reg-username"
+                name="username"
                 type="text"
                 required
+                autoComplete="username"
                 className="w-full pl-10 pr-4 py-2.5 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#0A192F] text-sm"
                 value={identifier}
                 onChange={(e) => setIdentifier(e.target.value)}
@@ -104,12 +118,14 @@ export default function Register({ setUser }) {
           </div>
 
           <div>
-            <label className="block text-sm font-semibold text-slate-700 mb-1.5">
+            <label htmlFor="reg-code" className="block text-sm font-semibold text-slate-700 mb-1.5">
               Mã nhân viên <span className="text-slate-400 font-normal">(không bắt buộc)</span>
             </label>
             <div className="relative">
               <BadgeCheck className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
+                id="reg-code"
+                name="employee_code"
                 type="text"
                 className="w-full pl-10 pr-4 py-2.5 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#0A192F] text-sm"
                 value={employeeCode}
@@ -120,13 +136,18 @@ export default function Register({ setUser }) {
           </div>
 
           <div>
-            <label className="block text-sm font-semibold text-slate-700 mb-1.5">Mật khẩu *</label>
+            <label htmlFor="reg-password" className="block text-sm font-semibold text-slate-700 mb-1.5">
+              Mật khẩu *
+            </label>
             <div className="relative">
               <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
+                id="reg-password"
+                name="new-password"
                 type={showPassword ? 'text' : 'password'}
                 required
                 minLength={4}
+                autoComplete="new-password"
                 className="w-full pl-10 pr-11 py-2.5 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#0A192F] text-sm"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -141,7 +162,20 @@ export default function Register({ setUser }) {
                 {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
             </div>
+            <p className="text-[11px] text-slate-500 mt-1">
+              Trình duyệt có thể gợi ý tự lưu mật khẩu để lần sau đăng nhập nhanh hơn.
+            </p>
           </div>
+
+          <label className="flex items-center gap-2 text-xs text-slate-600 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={rememberId}
+              onChange={(e) => setRememberId(e.target.checked)}
+              className="w-4 h-4 rounded border-slate-300 accent-[#0A192F] cursor-pointer"
+            />
+            <span>Nhớ tên đăng nhập cho lần đăng nhập sau</span>
+          </label>
 
           <button
             type="submit"

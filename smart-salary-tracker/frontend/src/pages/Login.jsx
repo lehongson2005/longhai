@@ -5,9 +5,12 @@ import { login } from '../services/authService';
 import BrandLogo from '../components/BrandLogo';
 import { useToast } from '../components/useToast';
 
+const REMEMBER_KEY = 'remembered_identifier';
+
 export default function Login({ setUser }) {
-  const [identifier, setIdentifier] = useState('');
+  const [identifier, setIdentifier] = useState(() => localStorage.getItem(REMEMBER_KEY) || '');
   const [password, setPassword] = useState('');
+  const [rememberId, setRememberId] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -22,6 +25,11 @@ export default function Login({ setUser }) {
     setLoading(true);
     try {
       const data = await login(identifier, password);
+      if (rememberId && identifier.trim()) {
+        localStorage.setItem(REMEMBER_KEY, identifier.trim());
+      } else {
+        localStorage.removeItem(REMEMBER_KEY);
+      }
       setUser(data.user);
       toast.success(`Chào mừng ${data.user.name}!`, 'Đăng nhập thành công');
       if (data.user?.role === 'admin') {
@@ -68,12 +76,14 @@ export default function Login({ setUser }) {
 
         <form onSubmit={handleLogin} className="space-y-4">
           <div>
-            <label className="block text-sm font-semibold text-slate-700 mb-1.5">
+            <label htmlFor="login-username" className="block text-sm font-semibold text-slate-700 mb-1.5">
               Tên đăng nhập / SĐT / Email
             </label>
             <div className="relative">
               <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
+                id="login-username"
+                name="username"
                 type="text"
                 required
                 autoComplete="username"
@@ -86,10 +96,14 @@ export default function Login({ setUser }) {
           </div>
 
           <div>
-            <label className="block text-sm font-semibold text-slate-700 mb-1.5">Mật khẩu</label>
+            <label htmlFor="login-password" className="block text-sm font-semibold text-slate-700 mb-1.5">
+              Mật khẩu
+            </label>
             <div className="relative">
               <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
+                id="login-password"
+                name="password"
                 type={showPassword ? 'text' : 'password'}
                 required
                 autoComplete="current-password"
@@ -108,6 +122,16 @@ export default function Login({ setUser }) {
               </button>
             </div>
           </div>
+
+          <label className="flex items-center gap-2 text-xs text-slate-600 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={rememberId}
+              onChange={(e) => setRememberId(e.target.checked)}
+              className="w-4 h-4 rounded border-slate-300 accent-[#0A192F] cursor-pointer"
+            />
+            <span>Nhớ tên đăng nhập cho lần sau (giữ đăng nhập 7 ngày)</span>
+          </label>
 
           <button
             type="submit"

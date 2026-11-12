@@ -27,7 +27,15 @@ describe('1. Database schema, shifts B1/B2 & memorable demo accounts', () => {
         const tables = await dbAll("SELECT name FROM sqlite_master WHERE type='table'");
         const names = tables.map((t) => t.name);
         expect(names).toEqual(
-            expect.arrayContaining(['users', 'shifts', 'work_schedules', 'expense_categories', 'expenses', 'salary_settings'])
+            expect.arrayContaining([
+                'users',
+                'shifts',
+                'work_schedules',
+                'expense_categories',
+                'expenses',
+                'salary_settings',
+                'salary_adjustments'
+            ])
         );
 
         const userColumns = await dbAll('PRAGMA table_info(users)');
@@ -305,5 +313,97 @@ describe('4. Shifts B1/B2 scheduling, Expenses save/validation & Dashboard salar
             .delete(`/api/expenses/${expId}`)
             .set('Authorization', `Bearer ${empToken}`);
         expect(delRes.statusCode).toBe(200);
+    });
+});
+
+describe('5. Bulk schedule (AUTO Sunday), Salary Adjustments, Custom OT & Health Storage Status', () => {
+    let empToken;
+
+    beforeAll(async () => {
+        await ready();
+        const empRes = await request(app).post('/api/auth/login').send({
+            identifier: 'nv1',
+            password: process.env.DEMO_EMPLOYEE_PASSWORD || '123456'
+        });
+        empToken = empRes.body.token;
+    });
+
+    test('exposes storage persistence info on /api/health', async () => {
+        const health = await request(app).get('/api/health');
+        expect(health.statusCode).toBe(200);
+        expect(health.body.status).toBe('ok');
+        expect(health.body.database).toBe('sqlite');
+        expect(health.body.persistent).toBe(false);
+    });
+
+    test('bulk schedules with AUTO day_type_mode and overwrite=false keeps existing shifts', async () => {
+        const shiftsRes = await request(app).get('/api/shifts').set('Authorization', `Bearer ${empToken}`);
+        const shiftA = shiftsRes.body.find((s) => s.code === 'A');
+
+        // 2026-11-10 already has B1 from describe block 4; 2026-11-15 is Sunday; 2026-11-16 is Monday
+        const bulkRes = await request(app)
+            .post('/api/schedules/bulk')
+            .set('Authorization', `Bearer ${empToken}`)
+            .send({
+                dates: ['2026-11-10', '2026-11-15', '2026-11-16'],
+                shift_id: shiftA.id,
+                day_type_mode: 'AUTO',
+                overwrite: false,
+                notes: 'Mục tiêu A'
+            });
+
+        expect(bulkRes.statusCode).toBe(200);
+        expect(bulkRes.body.skippedCount).toBe(1);
+        expect(bulkRes.body.createdCount).toBe(2);
+
+        const listRes = await request(app)
+            .get('/api/schedules')
+            .query({ month: '11', year: '2026' })
+            .set('Authorization', `Bearer ${empToken}`);
+        const nov10 = listRes.body.find((s) => s.work_date === '2026-11-10');
+        const nov15 = listRes.body.find((s) => s.work_date === '2026-11-15');
+        const nov16 = listRes.body.find((s) => s.work_date === '2026-11-16');
+
+        expect(nov10.shift_code).toBe('B1');
+        expect(nov15.day_type).toBe('WEEKLY_OFF');
+        expect(nov16.day_type).toBe('NORMAL');
+    });
+
+    test('creates allowances & deductions and combines them with shiftIncome on dashboard', async () => {
+        const allowRes = await request(app)
+            .post('/api/adjustments')
+            .set('Authorization', `Bearer ${empToken}`)
+            .send({
+                adjustment_date: '2026-11-15',
+                type: 'ALLOWANCE',
+                title: 'Phụ cấp ca đêm',
+                amount: 500000
+            });
+        expect(allowRes.statusCode).toBe(201);
+
+        const deductRes = await request(app)
+            .post('/api/adjustments')
+            .set('Authorization', `Bearer ${empToken}`)
+            .send({
+                adjustment_date: '2026-11-16',
+                type: 'DEDUCTION',
+                title: 'Ứng lương giữa tháng',
+                amount: 300000
+            });
+        expect(deductRes.statusCode).toBe(201);
+
+        const dashRes = await request(app)
+            .get('/api/dashboard')
+            .query({ date: '2026-11-10', month: '11', year: '2026' })
+            .set('Authorization', `Bearer ${empToken}`);
+        expect(dashRes.statusCode).toBe(200);
+        expect(dashRes.body.month.allowances).toBe(500000);
+        expect(dashRes.body.month.deductions).toBe(300000);
+        expect(dashRes.body.month.netSalary).toBe(dashRes.body.month.shiftIncome + 500000 - 300000);
+        expect(dashRes.body.month.adjustments.length).toBe(2);
+
+        // Cleanup adjustments
+        await request(app).delete(`/api/adjustments/${allowRes.body.id}`).set('Authorization', `Bearer ${empToken}`);
+        await request(app).delete(`/api/adjustments/${deductRes.body.id}`).set('Authorization', `Bearer ${empToken}`);
     });
 });

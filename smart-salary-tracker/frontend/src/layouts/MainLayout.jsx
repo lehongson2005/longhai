@@ -114,7 +114,7 @@ export default function MainLayout({ user, setUser }) {
         </header>
 
         <div className="p-4 sm:p-6 max-w-4xl mx-auto">
-          <Outlet />
+          <Outlet context={{ user }} />
         </div>
       </main>
 

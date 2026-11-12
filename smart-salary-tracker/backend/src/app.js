@@ -4,10 +4,12 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 
+const { getStorageInfo } = require('./database/db');
 const authRoutes = require('./routes/auth.routes');
 const shiftRoutes = require('./routes/shift.routes');
 const scheduleRoutes = require('./routes/schedule.routes');
 const expenseRoutes = require('./routes/expense.routes');
+const adjustmentRoutes = require('./routes/adjustment.routes');
 const dashboardRoutes = require('./routes/dashboard.routes');
 const settingsRoutes = require('./routes/settings.routes');
 const adminRoutes = require('./routes/admin.routes');
@@ -22,11 +24,13 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/shifts', shiftRoutes);
 app.use('/api/schedules', scheduleRoutes);
 app.use('/api/expenses', expenseRoutes);
+app.use('/api/adjustments', adjustmentRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/settings', settingsRoutes);
 
 app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok' });
+    const storage = getStorageInfo();
+    res.json({ status: 'ok', database: storage.driver, persistent: storage.persistent });
 });
 
 const frontendDistPath = path.resolve(__dirname, '../../frontend/dist');

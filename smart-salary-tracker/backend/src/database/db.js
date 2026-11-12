@@ -1,23 +1,107 @@
-const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
 const bcrypt = require('bcrypt');
 
-const dbPath = process.env.DB_PATH
-    ? path.resolve(process.env.DB_PATH)
-    : path.resolve(__dirname, '../../database.sqlite');
-const schemaPath = path.resolve(__dirname, 'schema.sql');
-
-const dbDir = path.dirname(dbPath);
-if (!fs.existsSync(dbDir)) {
-    fs.mkdirSync(dbDir, { recursive: true });
-}
-
-const db = new sqlite3.Database(dbPath);
+const databaseUrl = process.env.DATABASE_URL ? process.env.DATABASE_URL.trim() : '';
+const isPostgres = Boolean(databaseUrl);
 
 const DEFAULT_EXPENSE_CATEGORIES = ['Ăn uống', 'Di chuyển', 'Nhà ở', 'Mua sắm', 'Giải trí', 'Khác'];
 
+function shouldUseSsl(url) {
+    if (!url) return false;
+    const lower = url.toLowerCase();
+    if (lower.includes('sslmode=disable') || lower.includes('localhost') || lower.includes('127.0.0.1')) {
+        return false;
+    }
+    return { rejectUnauthorized: false };
+}
+
+function convertPlaceholders(sql) {
+    let out = '';
+    let paramIndex = 0;
+    let inSingleQuote = false;
+
+    for (let i = 0; i < sql.length; i += 1) {
+        const ch = sql[i];
+        if (ch === "'") {
+            out += ch;
+            if (inSingleQuote && sql[i + 1] === "'") {
+                out += "'";
+                i += 1;
+            } else {
+                inSingleQuote = !inSingleQuote;
+            }
+        } else if (ch === '?' && !inSingleQuote) {
+            paramIndex += 1;
+            out += `$${paramIndex}`;
+        } else {
+            out += ch;
+        }
+    }
+    return out;
+}
+
+function getMonthDateRange(month, year) {
+    const m = Number(month);
+    const y = Number(year);
+    if (!Number.isInteger(m) || m < 1 || m > 12 || !Number.isInteger(y) || y < 1900) {
+        throw new Error('Tháng hoặc năm không hợp lệ');
+    }
+    const start = `${y}-${String(m).padStart(2, '0')}-01`;
+    const nextYear = m === 12 ? y + 1 : y;
+    const nextMonth = m === 12 ? 1 : m + 1;
+    const endExclusive = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
+    return { start, endExclusive };
+}
+
+let db;
+let pool = null;
+
+if (isPostgres) {
+    const { Pool } = require('pg');
+    pool = new Pool({
+        connectionString: databaseUrl,
+        ssl: shouldUseSsl(databaseUrl)
+    });
+    db = {
+        isPostgres: true,
+        close: (cb) => {
+            pool.end()
+                .then(() => {
+                    if (typeof cb === 'function') cb(null);
+                })
+                .catch((err) => {
+                    if (typeof cb === 'function') cb(err);
+                });
+        }
+    };
+} else {
+    const sqlite3 = require('sqlite3').verbose();
+    const dbPath = process.env.DB_PATH
+        ? path.resolve(process.env.DB_PATH)
+        : path.resolve(__dirname, '../../database.sqlite');
+    const dbDir = path.dirname(dbPath);
+    if (!fs.existsSync(dbDir)) {
+        fs.mkdirSync(dbDir, { recursive: true });
+    }
+    db = new sqlite3.Database(dbPath);
+}
+
+const schemaPath = path.resolve(__dirname, isPostgres ? 'schema.pg.sql' : 'schema.sql');
+
 const dbRun = (sql, params = []) => {
+    if (isPostgres) {
+        let pgSql = convertPlaceholders(sql.trim());
+        const isInsert = /^\s*INSERT\s+/i.test(pgSql);
+        if (isInsert && !/\bRETURNING\b/i.test(pgSql)) {
+            pgSql = `${pgSql.replace(/;+$/, '')} RETURNING id`;
+        }
+        return pool.query(pgSql, params).then((res) => ({
+            id: isInsert && res.rows && res.rows[0] ? res.rows[0].id : null,
+            changes: res.rowCount || 0
+        }));
+    }
+
     return new Promise((resolve, reject) => {
         db.run(sql, params, function (err) {
             if (err) {
@@ -30,6 +114,11 @@ const dbRun = (sql, params = []) => {
 };
 
 const dbGet = (sql, params = []) => {
+    if (isPostgres) {
+        const pgSql = convertPlaceholders(sql);
+        return pool.query(pgSql, params).then((res) => res.rows[0] || undefined);
+    }
+
     return new Promise((resolve, reject) => {
         db.get(sql, params, (err, result) => {
             if (err) {
@@ -42,6 +131,11 @@ const dbGet = (sql, params = []) => {
 };
 
 const dbAll = (sql, params = []) => {
+    if (isPostgres) {
+        const pgSql = convertPlaceholders(sql);
+        return pool.query(pgSql, params).then((res) => res.rows);
+    }
+
     return new Promise((resolve, reject) => {
         db.all(sql, params, (err, rows) => {
             if (err) {
@@ -54,6 +148,10 @@ const dbAll = (sql, params = []) => {
 };
 
 const dbExec = (sql) => {
+    if (isPostgres) {
+        return pool.query(sql).then(() => undefined);
+    }
+
     return new Promise((resolve, reject) => {
         db.exec(sql, (err) => {
             if (err) reject(err);
@@ -61,6 +159,13 @@ const dbExec = (sql) => {
         });
     });
 };
+
+function getStorageInfo() {
+    return {
+        driver: isPostgres ? 'postgres' : 'sqlite',
+        persistent: isPostgres || process.env.PERSISTENT_DISK === 'true'
+    };
+}
 
 async function ensureUserDefaults(userId) {
     const existingSettings = await dbGet('SELECT id FROM salary_settings WHERE user_id = ?', [userId]);
@@ -72,7 +177,7 @@ async function ensureUserDefaults(userId) {
     }
 
     const existingCats = await dbGet('SELECT COUNT(*) as count FROM expense_categories WHERE user_id = ?', [userId]);
-    if (!existingCats || existingCats.count === 0) {
+    if (!existingCats || Number(existingCats.count || 0) === 0) {
         for (const cat of DEFAULT_EXPENSE_CATEGORIES) {
             await dbRun('INSERT INTO expense_categories (user_id, name, icon) VALUES (?, ?, ?)', [userId, cat, '']);
         }
@@ -80,6 +185,18 @@ async function ensureUserDefaults(userId) {
 }
 
 async function migrateUsersTable() {
+    if (isPostgres) {
+        await dbRun('ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT');
+        await dbRun("ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'employee'");
+        try {
+            await dbRun('ALTER TABLE users ALTER COLUMN email DROP NOT NULL');
+        } catch {
+            // email already nullable
+        }
+        await dbRun('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username)');
+        return;
+    }
+
     const userCols = await dbAll('PRAGMA table_info(users)');
     const hasRole = userCols.some((col) => col.name === 'role');
     if (!hasRole) {
@@ -194,8 +311,10 @@ async function seedDemoUsers() {
 }
 
 async function initializeDatabase() {
-    await dbRun('PRAGMA foreign_keys = ON');
-    await dbRun('PRAGMA busy_timeout = 5000');
+    if (!isPostgres) {
+        await dbRun('PRAGMA foreign_keys = ON');
+        await dbRun('PRAGMA busy_timeout = 5000');
+    }
     const schema = fs.readFileSync(schemaPath, 'utf8');
     await dbExec(schema);
 
@@ -219,5 +338,9 @@ module.exports = {
     dbExec,
     ready,
     ensureUserDefaults,
-    DEFAULT_EXPENSE_CATEGORIES
+    DEFAULT_EXPENSE_CATEGORIES,
+    getStorageInfo,
+    getMonthDateRange,
+    convertPlaceholders,
+    shouldUseSsl
 };

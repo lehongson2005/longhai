@@ -13,3 +13,5 @@ services:
         value: production
       - key: JWT_SECRET
         generateValue: true
+      # Optional: Set DATABASE_URL (e.g. free Neon / Supabase PostgreSQL connection string)
+      # in Render Dashboard -> Environment to persist users, schedules & expenses permanently.
